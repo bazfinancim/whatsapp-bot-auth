@@ -579,13 +579,12 @@ async function sendMediaFromUrl(client, chatId, caption, mediaUrl) {
                 timeout: 30000  // 30 seconds timeout for large files
             });
 
-            // Send media as document (bypasses Chromium H.264/AAC codec limitations)
+            // Send media with caption
             await client.sendMessage(chatId, media, {
-                sendMediaAsDocument: true,
                 caption: caption || ''
             });
 
-            console.log(`✓ [MEDIA] Sent successfully as document using fromUrl (${operationId})`);
+            console.log(`✓ [MEDIA] Sent successfully as media using fromUrl (${operationId})`);
             return true;
 
         } catch (urlError) {
@@ -617,13 +616,12 @@ async function sendMediaFromUrl(client, chatId, caption, mediaUrl) {
         // Create media object with filename
         const media = new MessageMedia(mimeType, base64, filename);
 
-        // Send media as document (bypasses Chromium H.264/AAC codec limitations)
+        // Send media with caption
         await client.sendMessage(chatId, media, {
-            sendMediaAsDocument: true,
             caption: caption || ''
         });
 
-        console.log(`✓ [MEDIA] Sent successfully as document using manual download (${operationId})`);
+        console.log(`✓ [MEDIA] Sent successfully as media using manual download (${operationId})`);
         return true;
 
     } catch (error) {
