@@ -1,7 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const QRCode = require('qrcode');
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeInMemoryStore } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
+const P = require('pino');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs');
 const path = require('path');
@@ -311,263 +313,219 @@ async function performPeriodicHealthCheck() {
     }
 }
 
-// Initialize WhatsApp client with robust error handling and auto-reconnect
-function initializeWhatsApp() {
+// Initialize WhatsApp client with Baileys (WebSocket-based, no browser needed!)
+async function initializeWhatsApp() {
     // GUARD: Prevent creating multiple client instances
-    // This prevents duplicate event handlers and scheduler conflicts
     if (client) {
         console.log('🛡️  Client already exists, skipping initialization');
         return;
     }
 
-    console.log('Initializing WhatsApp client...');
+    console.log('Initializing WhatsApp client with Baileys...');
 
     // Use persistent storage if available (Render Disk), fallback to local
     const sessionPath = process.env.WHATSAPP_SESSION_PATH || './whatsapp-sessions';
     console.log(`Using session storage at: ${sessionPath}`);
 
-    // Try to find system Chrome/Chromium (has H.264/AAC codec support for videos)
-    const fs = require('fs');
-    const chromePaths = [
-        '/usr/bin/google-chrome',
-        '/usr/bin/google-chrome-stable',
-        '/usr/bin/chromium',
-        '/usr/bin/chromium-browser'
-    ];
+    try {
+        // Initialize auth state (replaces LocalAuth)
+        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
-    let executablePath = undefined;
-    for (const path of chromePaths) {
-        if (fs.existsSync(path)) {
-            executablePath = path;
-            console.log(`Using Chrome/Chromium from: ${path}`);
-            break;
-        }
-    }
+        // Get latest WhatsApp Web version
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        console.log(`Using WA v${version.join('.')}, isLatest: ${isLatest}`);
 
-    if (!executablePath) {
-        console.log('⚠️  No system Chrome found, using bundled Chromium (video codecs may not work)');
-    }
-
-    client = new Client({
-        authStrategy: new LocalAuth({
-            dataPath: sessionPath
-        }),
-        puppeteer: {
-            executablePath: executablePath,
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--disable-gpu',
-                '--disable-extensions',
-                '--disable-background-networking',
-                // REMOVED: '--no-zygote', '--single-process' (causes crashes)
-            ]
-        }
-    });
-
-    // Event: QR Code received
-    client.on('qr', async (qr) => {
-        console.log('🔶 QR code received');
-        qrString = qr;
-        connectionStatus = 'qr_ready';
-    });
-
-    // Event: Client is ready
-    client.on('ready', async () => {
-        console.log('✅ WhatsApp client is ready!');
-        isAuthenticated = true;
-        isConnected = true;
-        connectionStatus = 'authenticated';
-        qrString = null;
-
-        // Check if this WhatsApp number should have bot enabled
-        try {
-            const info = client.info;
-            if (info && info.wid && info.wid._serialized) {
-                const authenticatedNumber = info.wid._serialized.split('@')[0];
-                logger.info(`📱 Authenticated WhatsApp number: ${authenticatedNumber}`);
-
-                // Check if this number is in the sales phone numbers list
-                if (SALES_PHONE_NUMBERS.includes(authenticatedNumber)) {
-                    isBotEnabled = true;
-                    logger.info(`🤖 [BOT-ACTIVATION] Bot ENABLED for phone number ${authenticatedNumber}`);
-                } else {
-                    isBotEnabled = false;
-                    logger.info(`🤖 [BOT-ACTIVATION] Bot DISABLED - phone ${authenticatedNumber} not in sales numbers [${SALES_PHONE_NUMBERS.join(', ')}]`);
-                }
-            } else {
-                logger.warn('⚠️  Could not determine authenticated phone number, bot disabled');
-                isBotEnabled = false;
-            }
-        } catch (error) {
-            logger.error('❌ Error checking phone number for bot activation:', error);
-            isBotEnabled = false;
-        }
-
-        // Initialize reminder scheduler if bot is enabled and database is available
-        if (isBotEnabled && dbPool) {
-            initializeScheduler(dbPool, client, logger);
-
-            // Start cron job to check for reminders every 5 minutes
-            const checkInterval = process.env.REMINDER_CHECK_INTERVAL || '5';
-            cron.schedule(`*/${checkInterval} * * * *`, async () => {
-                await checkAndSendReminders();
-            });
-
-            logger.info(`⏰ Reminder scheduler started (checking every ${checkInterval} minutes)`);
-        }
-
-        // Start periodic health monitoring (every 5 minutes)
-        cron.schedule('*/5 * * * *', async () => {
-            await performPeriodicHealthCheck();
+        // Create socket (Baileys client) - NO BROWSER NEEDED!
+        client = makeWASocket({
+            version,
+            auth: state,
+            printQRInTerminal: false, // We handle QR via API
+            logger: P({ level: process.env.NODE_ENV === 'production' ? 'silent' : 'info' }),
+            browser: ['WhatsApp Bot', 'Chrome', '110.0.0'],
+            markOnlineOnConnect: true
         });
-        logger.info('🏥 Health monitoring started (checking every 5 minutes)');
-    });
 
-    // Event: Authentication successful
-    client.on('authenticated', () => {
-        console.log('✅ WhatsApp authenticated');
-        isAuthenticated = true;
-    });
+        // Event: Save credentials on update (CRITICAL for persistence)
+        client.ev.on('creds.update', saveCreds);
 
-    // Event: Authentication failure
-    client.on('auth_failure', (msg) => {
-        console.error('❌ Authentication failed:', msg);
-        connectionStatus = 'auth_failed';
-        isAuthenticated = false;
-        isConnected = false;
-    });
+        // Event: Connection updates (handles QR, ready, disconnected)
+        client.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
 
-    // Event: Loading screen (shows connection progress)
-    client.on('loading_screen', (percent, message) => {
-        console.log(`⏳ Loading: ${percent}% - ${message}`);
-    });
-
-    // Event: State change monitoring
-    client.on('change_state', (state) => {
-        console.log(`🔄 State changed to: ${state}`);
-        connectionStatus = state;
-    });
-
-    // Event: Remote session saved
-    client.on('remote_session_saved', () => {
-        console.log('💾 Session data saved remotely');
-    });
-
-    // Event: Disconnected with auto-reconnect
-    client.on('disconnected', async (reason) => {
-        console.log(`⚠️  WhatsApp client disconnected: ${reason}`);
-        connectionStatus = 'disconnected';
-        isAuthenticated = false;
-        isConnected = false;
-        qrString = null;
-
-        // CRITICAL: Destroy old client before reinitializing to prevent multiple instances
-        console.log('🛑 Destroying old client before reconnect...');
-        try {
-            if (client) {
-                await client.destroy();
-                client = null;
-            }
-        } catch (error) {
-            console.error('Error destroying client:', error.message);
-            client = null; // Force null even if destroy fails
-        }
-
-        // Auto-reconnect after 5 seconds
-        setTimeout(() => {
-            console.log('🔄 Reinitializing WhatsApp client...');
-            initializeWhatsApp();
-        }, 5000);
-    });
-
-    // Event: Incoming message (for Stupid Bot)
-    client.on('message', async (message) => {
-        try {
-            // Ignore group messages and messages from self
-            if (message.from.includes('@g.us') || message.fromMe) {
-                return;
+            // QR Code received
+            if (qr) {
+                console.log('🔶 QR code received');
+                qrString = qr;
+                connectionStatus = 'qr_ready';
             }
 
-            // Skip bot processing if bot is disabled (checked by phone number)
-            if (!isBotEnabled) {
-                return;
-            }
+            // Connection opened (ready)
+            if (connection === 'open') {
+                console.log('✅ WhatsApp client is ready!');
+                isAuthenticated = true;
+                isConnected = true;
+                connectionStatus = 'authenticated';
+                qrString = null;
 
-            // Forward ALL messages to avi-website API for chatbot session management
-            // This handles: reset, new sessions, reminders, etc.
-            const aviWebsiteUrl = process.env.AVI_WEBSITE_API_URL;
-
-            if (aviWebsiteUrl && message.body) {
+                // Get authenticated number
                 try {
-                    const phoneNumber = stupidBot.extractPhoneNumber(message.from);
-                    const contact = await message.getContact();
+                    const authenticatedNumber = client.user?.id?.split(':')[0];
+                    if (authenticatedNumber) {
+                        logger.info(`📱 Authenticated WhatsApp number: ${authenticatedNumber}`);
 
-                    logger.info(`📨 [AVI-CHATBOT] Forwarding message from ${phoneNumber}: "${message.body}"`);
+                        // Check if this number is in the sales phone numbers list
+                        if (SALES_PHONE_NUMBERS.includes(authenticatedNumber)) {
+                            isBotEnabled = true;
+                            logger.info(`🤖 [BOT-ACTIVATION] Bot ENABLED for phone number ${authenticatedNumber}`);
+                        } else {
+                            isBotEnabled = false;
+                            logger.info(`🤖 [BOT-ACTIVATION] Bot DISABLED - phone ${authenticatedNumber} not in sales numbers [${SALES_PHONE_NUMBERS.join(', ')}]`);
+                        }
+                    } else {
+                        logger.warn('⚠️  Could not determine authenticated phone number, bot disabled');
+                        isBotEnabled = false;
+                    }
+                } catch (error) {
+                    logger.error('❌ Error checking phone number for bot activation:', error);
+                    isBotEnabled = false;
+                }
 
-                    // Call avi-website API to handle the message
-                    const response = await fetch(`${aviWebsiteUrl}/api/whatsapp/message`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            phone: phoneNumber,
-                            message: message.body,
-                            name: contact.pushname || contact.name || null,
-                            chat_id: message.from
-                        })
+                // Initialize reminder scheduler if bot is enabled and database is available
+                if (isBotEnabled && dbPool) {
+                    initializeScheduler(dbPool, client, logger);
+
+                    // Start cron job to check for reminders every 5 minutes
+                    const checkInterval = process.env.REMINDER_CHECK_INTERVAL || '5';
+                    cron.schedule(`*/${checkInterval} * * * *`, async () => {
+                        await checkAndSendReminders();
                     });
 
-                    if (!response.ok) {
-                        throw new Error(`API returned ${response.status}: ${response.statusText}`);
+                    logger.info(`⏰ Reminder scheduler started (checking every ${checkInterval} minutes)`);
+                }
+
+                // Start periodic health monitoring (every 5 minutes)
+                cron.schedule('*/5 * * * *', async () => {
+                    await performPeriodicHealthCheck();
+                });
+                logger.info('🏥 Health monitoring started (checking every 5 minutes)');
+            }
+
+            // Connection closed (disconnected)
+            if (connection === 'close') {
+                const shouldReconnect = (lastDisconnect?.error instanceof Boom)
+                    ? lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut
+                    : true;
+
+                console.log(`⚠️  Connection closed: ${lastDisconnect?.error?.message}`);
+                connectionStatus = 'disconnected';
+                isAuthenticated = false;
+                isConnected = false;
+                qrString = null;
+
+                if (shouldReconnect) {
+                    console.log('🔄 Preparing to reconnect...');
+
+                    // Clean up
+                    if (client) {
+                        client.ev.removeAllListeners();
+                        client = null;
                     }
 
-                    const data = await response.json();
-
-                    // Session is already saved in avi-website database with chat_id
-                    // No need to save locally anymore
-
-                    // Send response back to user
-                    if (data.success && data.message) {
-                        await client.sendMessage(message.from, data.message);
-                        logger.info(`✅ [AVI-CHATBOT] Sent response to ${phoneNumber} (${data.action})`);
-                    } else {
-                        throw new Error(data.error || 'Unknown error from API');
-                    }
-
-                    // Message handled by avi-website, don't process further
-                    return;
-                } catch (error) {
-                    logger.error('❌ [AVI-CHATBOT] Error forwarding to avi-website:', error);
-                    // Fall through to original stupid-bot handling if API fails
+                    // Reconnect after delay
+                    setTimeout(() => {
+                        console.log('🔄 Reinitializing WhatsApp client...');
+                        initializeWhatsApp();
+                    }, 5000);
+                } else {
+                    console.log('🛑 Logged out - not reconnecting');
                 }
             }
+        });
 
-            // FALLBACK: Original stupid-bot logic (if AVI_WEBSITE_API_URL not set or API failed)
-            // Check if message contains trigger keywords
-            if (stupidBot.isTriggerMessage(message.body)) {
-                logger.info(`🤖 [STUPID-BOT] Trigger detected from ${message.from}: "${message.body}"`);
+        // Event: Incoming messages (replaces 'message' event)
+        client.ev.on('messages.upsert', async ({ messages, type }) => {
+            if (type !== 'notify') return; // Only handle new messages
 
-                // Handle trigger message (send greeting + form link) with persistent storage
-                await stupidBot.handleTriggerMessage(client, message.from, logger, dbPool);
+            for (const msg of messages) {
+                try {
+                    // Skip group messages
+                    if (msg.key.remoteJid?.includes('@g.us')) continue;
+
+                    // Skip messages from self
+                    if (msg.key.fromMe) continue;
+
+                    // Skip if bot is disabled
+                    if (!isBotEnabled) continue;
+
+                    // Get message text
+                    const messageText = msg.message?.conversation
+                        || msg.message?.extendedTextMessage?.text
+                        || '';
+
+                    if (!messageText) continue;
+
+                    const chatId = msg.key.remoteJid;
+
+                    // Forward to avi-website API
+                    const aviWebsiteUrl = process.env.AVI_WEBSITE_API_URL;
+
+                    if (aviWebsiteUrl) {
+                        try {
+                            const phoneNumber = chatId.split('@')[0];
+
+                            logger.info(`📨 [AVI-CHATBOT] Forwarding message from ${phoneNumber}: "${messageText}"`);
+
+                            const response = await fetch(`${aviWebsiteUrl}/api/whatsapp/message`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    phone: phoneNumber,
+                                    message: messageText,
+                                    name: msg.pushName || phoneNumber,
+                                    chat_id: chatId
+                                })
+                            });
+
+                            if (!response.ok) {
+                                throw new Error(`API returned ${response.status}`);
+                            }
+
+                            const data = await response.json();
+
+                            if (data.success && data.message) {
+                                await client.sendMessage(chatId, { text: data.message });
+                                logger.info(`✅ [AVI-CHATBOT] Sent response to ${phoneNumber}`);
+                            }
+
+                            return; // Message handled
+                        } catch (error) {
+                            logger.error('❌ [AVI-CHATBOT] Error:', error);
+                        }
+                    }
+
+                    // Fallback: stupid-bot logic
+                    if (stupidBot.isTriggerMessage(messageText)) {
+                        logger.info(`🤖 [STUPID-BOT] Trigger detected from ${chatId}: "${messageText}"`);
+                        await stupidBot.handleTriggerMessage(client, chatId, logger, dbPool);
+                    }
+                } catch (error) {
+                    logger.error('🤖 Error processing message:', error);
+                }
             }
-        } catch (error) {
-            logger.error('🤖 [STUPID-BOT] Error processing message:', error);
-        }
-    });
+        });
 
-    // Initialize the client
-    client.initialize().catch(error => {
+        console.log('✅ WhatsApp client initialized with Baileys');
+
+    } catch (error) {
         console.error('❌ Failed to initialize WhatsApp client:', error);
-        // Retry initialization after 10 seconds
+        client = null;
+
+        // Retry after 10 seconds
         setTimeout(() => {
             console.log('🔄 Retrying initialization...');
             initializeWhatsApp();
         }, 10000);
-    });
+    }
 }
 
 // STABILITY: Wrap message sending to track pending operations
@@ -576,7 +534,8 @@ async function sendMessageAsync(client, chatId, message) {
     pendingOperations.add(operationId);
 
     try {
-        await client.sendMessage(chatId, message);
+        // Baileys requires { text: message } format
+        await client.sendMessage(chatId, { text: message });
         console.log(`✓ Message sent successfully (${operationId})`);
         return true;
     } catch (error) {
@@ -587,76 +546,60 @@ async function sendMessageAsync(client, chatId, message) {
     }
 }
 
-// Send media message from URL
+// Send media message from URL - Baileys version (FIXES VIDEO CODEC ISSUES!)
 async function sendMediaFromUrl(client, chatId, caption, mediaUrl) {
     const operationId = `media-${Date.now()}-${Math.random()}`;
     pendingOperations.add(operationId);
 
     try {
-        console.log(`📥 [MEDIA] Downloading from: ${mediaUrl} (${operationId})`);
+        console.log(`📥 [MEDIA] Sending from: ${mediaUrl} (${operationId})`);
 
-        // Try WhatsApp Web.js built-in method first
-        try {
-            const media = await MessageMedia.fromUrl(mediaUrl, {
-                unsafeMime: true,
-                timeout: 30000  // 30 seconds timeout for large files
+        // Determine media type from URL
+        const isVideo = mediaUrl.match(/\.(mp4|mov|avi|mkv|webm)($|\?)/i);
+        const isImage = mediaUrl.match(/\.(jpg|jpeg|png|gif|webp)($|\?)/i);
+
+        if (isVideo) {
+            // VIDEO - Direct URL streaming (NO CHROMIUM CODEC ISSUES!)
+            // Baileys streams directly via WebSocket, no browser needed
+            await client.sendMessage(chatId, {
+                video: { url: mediaUrl },
+                caption: caption || '',
+                gifPlayback: mediaUrl.includes('gif'), // For animated content
+                mimetype: 'video/mp4'
             });
 
-            // Send media with caption
-            await client.sendMessage(chatId, media, {
+            console.log(`✓ [MEDIA] Video sent successfully (${operationId})`);
+        } else if (isImage) {
+            // IMAGE
+            await client.sendMessage(chatId, {
+                image: { url: mediaUrl },
                 caption: caption || ''
             });
 
-            console.log(`✓ [MEDIA] Sent successfully as media using fromUrl (${operationId})`);
-            return true;
+            console.log(`✓ [MEDIA] Image sent successfully (${operationId})`);
+        } else {
+            // DOCUMENT (fallback for other files)
+            await client.sendMessage(chatId, {
+                document: { url: mediaUrl },
+                caption: caption || '',
+                mimetype: 'application/octet-stream',
+                fileName: mediaUrl.split('/').pop().split('?')[0]
+            });
 
-        } catch (urlError) {
-            console.warn(`⚠️  [MEDIA] fromUrl failed, trying manual download (${operationId}):`, urlError.message);
+            console.log(`✓ [MEDIA] Document sent successfully (${operationId})`);
         }
 
-        // Fallback: Manual download
-        console.log(`📥 [MEDIA] Downloading manually... (${operationId})`);
-
-        const response = await axios.get(mediaUrl, {
-            responseType: 'arraybuffer',
-            timeout: 60000,  // 60 seconds for large videos
-            maxContentLength: 100 * 1024 * 1024,  // 100 MB limit
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        });
-
-        const buffer = Buffer.from(response.data);
-        const mimeType = response.headers['content-type'] || 'video/mp4';
-        const base64 = buffer.toString('base64');
-
-        console.log(`✓ [MEDIA] Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)} MB (${mimeType}) (${operationId})`);
-
-        // Extract filename from URL or generate one
-        const urlParts = mediaUrl.split('/');
-        const filename = urlParts[urlParts.length - 1].split('?')[0] || 'media.mp4';
-
-        // Create media object with filename
-        const media = new MessageMedia(mimeType, base64, filename);
-
-        // Send media with caption
-        await client.sendMessage(chatId, media, {
-            caption: caption || ''
-        });
-
-        console.log(`✓ [MEDIA] Sent successfully as media using manual download (${operationId})`);
         return true;
 
     } catch (error) {
-        console.error(`❌ [MEDIA] Failed to send media (${operationId}):`, error.message);
+        console.error(`❌ [MEDIA] Failed (${operationId}):`, error.message);
 
-        // Fallback: Send text-only if media fails
+        // Fallback: text only
         try {
-            console.log(`⚠️  [MEDIA] Falling back to text-only message (${operationId})`);
-            await client.sendMessage(chatId, `${caption}\n\n[Video: ${mediaUrl}]`);
+            await client.sendMessage(chatId, { text: `${caption}\n\n[Media: ${mediaUrl}]` });
             console.log(`✓ [MEDIA] Sent text fallback (${operationId})`);
         } catch (fallbackError) {
-            console.error(`❌ [MEDIA] Text fallback also failed (${operationId}):`, fallbackError.message);
+            console.error(`❌ [MEDIA] Text fallback failed (${operationId}):`, fallbackError.message);
         }
 
         return false;

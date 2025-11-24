@@ -375,7 +375,7 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
             logger.info(`🤖 [STUPID-BOT] User ${phoneNumber} already pending (since ${userData.timestamp})`);
 
             // Send "already registered" message
-            await client.sendMessage(chatId, BOT_CONFIG.messages.alreadyRegistered);
+            await client.sendMessage(chatId, { text: BOT_CONFIG.messages.alreadyRegistered });
             logger.info(`🤖 [STUPID-BOT] Sent "already registered" message to ${phoneNumber}`);
             return;
         }
@@ -413,7 +413,7 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
         await saveSession(sessionId, chatId, phoneNumber, dbPool);
 
         // Message #1: Send introduction (immediate)
-        await client.sendMessage(chatId, BOT_CONFIG.messages.introduction);
+        await client.sendMessage(chatId, { text: BOT_CONFIG.messages.introduction });
         logger.info(`🤖 [STUPID-BOT] Sent introduction message to ${phoneNumber}`);
 
         // Also keep in memory for fast access (cache)
@@ -431,7 +431,7 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
         setTimeout(async () => {
             try {
                 const chatbotLinkMessage = BOT_CONFIG.messages.chatbotLink.replace('{chatbotUrl}', chatbotUrl);
-                await client.sendMessage(chatId, chatbotLinkMessage);
+                await client.sendMessage(chatId, { text: chatbotLinkMessage });
                 logger.info(`🤖 [STUPID-BOT] Sent chatbot link to ${phoneNumber} (15 seconds after introduction)`);
             } catch (error) {
                 logger.error(`🤖 [STUPID-BOT] Error sending chatbot link:`, error);
@@ -442,7 +442,7 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
 
         // Send error message to user
         try {
-            await client.sendMessage(chatId, 'מצטער/ת, משהו השתבש. אנא נסה/י שוב מאוחר יותר.');
+            await client.sendMessage(chatId, { text: 'מצטער/ת, משהו השתבש. אנא נסה/י שוב מאוחר יותר.' });
         } catch (sendError) {
             logger.error('🤖 [STUPID-BOT] Error sending error message:', sendError);
         }
@@ -587,7 +587,7 @@ async function handleFormCompletion(client, webhookData, logger, dbPool = null) 
             webhookData.name || 'User',
             webhookData.lead_id || ''
         );
-        await client.sendMessage(chatId, summaryMessage);
+        await client.sendMessage(chatId, { text: summaryMessage });
 
         logger.info(`🤖 [STUPID-BOT] Sent Q&A summary to ${phoneNumber}`);
 
