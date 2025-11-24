@@ -579,9 +579,13 @@ async function sendMediaFromUrl(client, chatId, caption, mediaUrl) {
                 timeout: 30000  // 30 seconds timeout for large files
             });
 
-            await client.sendMessage(chatId, media, {
-                caption: caption
-            });
+            // Send media first
+            await client.sendMessage(chatId, media);
+
+            // Send caption as follow-up if provided
+            if (caption) {
+                await client.sendMessage(chatId, caption);
+            }
 
             console.log(`✓ [MEDIA] Sent successfully using fromUrl (${operationId})`);
             return true;
@@ -608,13 +612,20 @@ async function sendMediaFromUrl(client, chatId, caption, mediaUrl) {
 
         console.log(`✓ [MEDIA] Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)} MB (${mimeType}) (${operationId})`);
 
-        // Create media object
-        const media = new MessageMedia(mimeType, base64);
+        // Extract filename from URL or generate one
+        const urlParts = mediaUrl.split('/');
+        const filename = urlParts[urlParts.length - 1].split('?')[0] || 'media.mp4';
 
-        // Send with caption
-        await client.sendMessage(chatId, media, {
-            caption: caption
-        });
+        // Create media object with filename
+        const media = new MessageMedia(mimeType, base64, filename);
+
+        // Send media first, then caption as separate message
+        await client.sendMessage(chatId, media);
+
+        // Send caption as follow-up message if provided
+        if (caption) {
+            await client.sendMessage(chatId, caption);
+        }
 
         console.log(`✓ [MEDIA] Sent successfully using manual download (${operationId})`);
         return true;
