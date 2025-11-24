@@ -326,11 +326,34 @@ function initializeWhatsApp() {
     const sessionPath = process.env.WHATSAPP_SESSION_PATH || './whatsapp-sessions';
     console.log(`Using session storage at: ${sessionPath}`);
 
+    // Try to find system Chrome/Chromium (has H.264/AAC codec support for videos)
+    const fs = require('fs');
+    const chromePaths = [
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/chromium',
+        '/usr/bin/chromium-browser'
+    ];
+
+    let executablePath = undefined;
+    for (const path of chromePaths) {
+        if (fs.existsSync(path)) {
+            executablePath = path;
+            console.log(`Using Chrome/Chromium from: ${path}`);
+            break;
+        }
+    }
+
+    if (!executablePath) {
+        console.log('⚠️  No system Chrome found, using bundled Chromium (video codecs may not work)');
+    }
+
     client = new Client({
         authStrategy: new LocalAuth({
             dataPath: sessionPath
         }),
         puppeteer: {
+            executablePath: executablePath,
             headless: true,
             args: [
                 '--no-sandbox',
