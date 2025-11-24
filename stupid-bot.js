@@ -13,10 +13,26 @@ const BOT_CONFIG = {
     // Form URL to send to users
     formUrl: process.env.BOT_FORM_URL || 'https://baz-f.co.il/chatbot',
 
+    // Video testimonial URL
+    testimonialVideoUrl: process.env.BOT_TESTIMONIAL_VIDEO_URL || 'https://res.cloudinary.com/dp3upl52j/video/upload/v1763899797/testimonial_video_vdy3yt.mp4',
+
     // Messages (support Hebrew and English)
     messages: {
-        greeting: process.env.BOT_GREETING_MESSAGE ||
-            'היי, אני בני חבסוב מצוות בז פיננים 😊\n\nאני כבר 15 שנה בתחום, בעל תעודת CFP - מתכנן פיננסי מוסמך, בעל תואר B.A במנהל עסקים עם התמחות במימון וחשבונאות ובעל רישיון פנסיוני ואלמנטרי.\n\nהיחודיות שלנו היא שהצלחנו לחסוך ליותר מ-93% מהלקוחות שפנו אלינו סכומים של מעל 180,000 שח.\n\nהממוצע שאנחנו חוסכים ללקוחות שלנו עומד על 372,000 ש"ח.\n\nענו על 10 שאלות קצרות כדי שנוכל להבין עד כמה העולמות הפיננסים שלכם מנוהלים נכון? והאם נוכל להוסיף לפחות עוד 100,000 ש"ח לתיק שלכם.\n\nכנסו ללינק:\n',
+        // Message #1: Introduction (immediate)
+        introduction: process.env.BOT_INTRODUCTION_MESSAGE ||
+            'תודה שפנית, נעים מאוד אבי ישי! 😊\n\nככלכן בעל תואר B.A במנהל עסקים ובעל רישיון פנסיוני, מעל 20 שנה בתחום ובעלים של בז פיננסים חברה שמעניקה פתרונות במגוון תחומים:\n\n✅ ליווי ייעוץ עסקי ובנייית מודלים כלכליים\n✅ ניתוח תיק פנסיוני\n✅ תכנון פיננסי מקיף\n✅ ייעוץ ותכנון פרישה\n✅ ניהול השקעות\n✅ פתרונות ביטוח\n✅ ייעוץ משכנתאות ופתרונות אשראי נוספים',
+
+        // Message #2: Chatbot link (15 seconds after introduction)
+        chatbotLink: process.env.BOT_CHATBOT_LINK_MESSAGE ||
+            '📝 הכנתי לכם 10 שאלות קצרות כדי שאוכל לתפוף את עולמכם הפיננסי בהתאמה אישית\n\nכנסו ללינק:\n👇🏻👇🏻👇🏻👇🏻👇🏻👇🏻\n\n{chatbotUrl}\n\n💥הקישור תקף ל-24 שעות💥',
+
+        // Message #4: Video testimonial caption
+        videoCaption: process.env.BOT_VIDEO_CAPTION ||
+            'משתף אותכם בחוויה שעברו משפחת יוסף\nד"ר חזי מנכ"ל כפר הנוער כנות ורעייתו מיכל',
+
+        // Message #5: Follow-up after video
+        videoFollowup: process.env.BOT_VIDEO_FOLLOWUP_MESSAGE ||
+            'היי\', עדיין ממתינים למילוי השאלון. הינה שוב הלינק לשאלון:\n\n👇🏻👇🏻👇🏻👇🏻👇🏻👇🏻\n\n{chatbotUrl}',
 
         success: process.env.BOT_SUCCESS_MESSAGE ||
             '✅ מעולה!\n\nהטופס התקבל בהצלחה.\n\nנחזור אליכם בהקדם.\n\nתודה! 🎉',
@@ -396,9 +412,9 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
         // Save session to local database for lookup when form completion webhook comes
         await saveSession(sessionId, chatId, phoneNumber, dbPool);
 
-        // Send greeting + form link with session
-        const fullMessage = BOT_CONFIG.messages.greeting + chatbotUrl;
-        await client.sendMessage(chatId, fullMessage);
+        // Message #1: Send introduction (immediate)
+        await client.sendMessage(chatId, BOT_CONFIG.messages.introduction);
+        logger.info(`🤖 [STUPID-BOT] Sent introduction message to ${phoneNumber}`);
 
         // Also keep in memory for fast access (cache)
         pendingUsers.set(phoneNumber, {
@@ -409,7 +425,18 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
         });
 
         const totalSessions = await getActiveSessionsCount(dbPool);
-        logger.info(`🤖 [STUPID-BOT] Sent form link to ${phoneNumber} with session ${sessionId}, saved to database (${totalSessions} active sessions)`);
+        logger.info(`🤖 [STUPID-BOT] Session ${sessionId} saved to database (${totalSessions} active sessions)`);
+
+        // Message #2: Send chatbot link after 15 seconds
+        setTimeout(async () => {
+            try {
+                const chatbotLinkMessage = BOT_CONFIG.messages.chatbotLink.replace('{chatbotUrl}', chatbotUrl);
+                await client.sendMessage(chatId, chatbotLinkMessage);
+                logger.info(`🤖 [STUPID-BOT] Sent chatbot link to ${phoneNumber} (15 seconds after introduction)`);
+            } catch (error) {
+                logger.error(`🤖 [STUPID-BOT] Error sending chatbot link:`, error);
+            }
+        }, 15000); // 15 seconds
     } catch (error) {
         logger.error('🤖 [STUPID-BOT] Error handling trigger message:', error);
 

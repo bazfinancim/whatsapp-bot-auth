@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 const cron = require('node-cron');
+const axios = require('axios');
 const stupidBot = require('./stupid-bot');
 const { migrateReminderColumns } = require('./lib/database-migration');
 const { initializeScheduler, checkAndSendReminders, getReminderStats } = require('./lib/reminder-scheduler');
@@ -557,6 +558,79 @@ async function sendMessageAsync(client, chatId, message) {
         return true;
     } catch (error) {
         console.error(`✗ Failed to send message (${operationId}):`, error.message);
+        return false;
+    } finally {
+        pendingOperations.delete(operationId);
+    }
+}
+
+// Send media message from URL
+async function sendMediaFromUrl(client, chatId, caption, mediaUrl) {
+    const operationId = `media-${Date.now()}-${Math.random()}`;
+    pendingOperations.add(operationId);
+
+    try {
+        console.log(`📥 [MEDIA] Downloading from: ${mediaUrl} (${operationId})`);
+
+        // Try WhatsApp Web.js built-in method first
+        try {
+            const media = await MessageMedia.fromUrl(mediaUrl, {
+                unsafeMime: true,
+                timeout: 30000  // 30 seconds timeout for large files
+            });
+
+            await client.sendMessage(chatId, media, {
+                caption: caption
+            });
+
+            console.log(`✓ [MEDIA] Sent successfully using fromUrl (${operationId})`);
+            return true;
+
+        } catch (urlError) {
+            console.warn(`⚠️  [MEDIA] fromUrl failed, trying manual download (${operationId}):`, urlError.message);
+        }
+
+        // Fallback: Manual download
+        console.log(`📥 [MEDIA] Downloading manually... (${operationId})`);
+
+        const response = await axios.get(mediaUrl, {
+            responseType: 'arraybuffer',
+            timeout: 60000,  // 60 seconds for large videos
+            maxContentLength: 100 * 1024 * 1024,  // 100 MB limit
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+
+        const buffer = Buffer.from(response.data);
+        const mimeType = response.headers['content-type'] || 'video/mp4';
+        const base64 = buffer.toString('base64');
+
+        console.log(`✓ [MEDIA] Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)} MB (${mimeType}) (${operationId})`);
+
+        // Create media object
+        const media = new MessageMedia(mimeType, base64);
+
+        // Send with caption
+        await client.sendMessage(chatId, media, {
+            caption: caption
+        });
+
+        console.log(`✓ [MEDIA] Sent successfully using manual download (${operationId})`);
+        return true;
+
+    } catch (error) {
+        console.error(`❌ [MEDIA] Failed to send media (${operationId}):`, error.message);
+
+        // Fallback: Send text-only if media fails
+        try {
+            console.log(`⚠️  [MEDIA] Falling back to text-only message (${operationId})`);
+            await client.sendMessage(chatId, `${caption}\n\n[Video: ${mediaUrl}]`);
+            console.log(`✓ [MEDIA] Sent text fallback (${operationId})`);
+        } catch (fallbackError) {
+            console.error(`❌ [MEDIA] Text fallback also failed (${operationId}):`, fallbackError.message);
+        }
+
         return false;
     } finally {
         pendingOperations.delete(operationId);
@@ -1623,7 +1697,7 @@ app.post('/api/bot/send-message', messageLimiter, async (req, res) => {
             });
         }
 
-        const { phone, message } = req.body;
+        const { phone, message, mediaUrl } = req.body;
 
         if (!phone || !message) {
             return res.status(400).json({
@@ -1636,7 +1710,7 @@ app.post('/api/bot/send-message', messageLimiter, async (req, res) => {
         const normalizedPhone = phone.replace(/[^\d+]/g, '');
         const chatId = normalizedPhone.includes('@') ? normalizedPhone : `${normalizedPhone}@c.us`;
 
-        logger.info(`📨 [SEND-MESSAGE] Sending message to ${normalizedPhone}`);
+        logger.info(`📨 [SEND-MESSAGE] Sending message to ${normalizedPhone}${mediaUrl ? ' (with media)' : ''}`);
 
         // Return 202 Accepted immediately
         res.status(202).json({
@@ -1647,9 +1721,24 @@ app.post('/api/bot/send-message', messageLimiter, async (req, res) => {
             timestamp: new Date().toISOString()
         });
 
-        // Send message in background
-        setImmediate(() => {
-            sendMessageAsync(client, chatId, message);
+        // Send message in background (with or without media)
+        setImmediate(async () => {
+            const operationId = `msg-${Date.now()}-${Math.random()}`;
+            pendingOperations.add(operationId);
+
+            try {
+                if (mediaUrl) {
+                    // Send media message
+                    await sendMediaFromUrl(client, chatId, message, mediaUrl);
+                } else {
+                    // Send text-only message
+                    await sendMessageAsync(client, chatId, message);
+                }
+            } catch (error) {
+                logger.error(`✗ Failed to send message (${operationId}):`, error.message);
+            } finally {
+                pendingOperations.delete(operationId);
+            }
         });
     } catch (error) {
         logger.error('🤖 [SEND-MESSAGE] Error:', error);
