@@ -466,7 +466,14 @@ async function initializeWhatsApp() {
 
                     const chatId = msg.key.remoteJid;
 
-                    // Forward to avi-website API
+                    // Check for trigger message FIRST (stupid-bot has priority)
+                    if (stupidBot.isTriggerMessage(messageText)) {
+                        logger.info(`🤖 [STUPID-BOT] Trigger detected from ${chatId}: "${messageText}"`);
+                        await stupidBot.handleTriggerMessage(client, chatId, logger, dbPool);
+                        return; // Message handled by stupid-bot
+                    }
+
+                    // If not a trigger, forward to avi-website API (avi-chatbot)
                     const aviWebsiteUrl = process.env.AVI_WEBSITE_API_URL;
 
                     if (aviWebsiteUrl) {
@@ -497,16 +504,10 @@ async function initializeWhatsApp() {
                                 logger.info(`✅ [AVI-CHATBOT] Sent response to ${phoneNumber}`);
                             }
 
-                            return; // Message handled
+                            return; // Message handled by avi-chatbot
                         } catch (error) {
                             logger.error('❌ [AVI-CHATBOT] Error:', error);
                         }
-                    }
-
-                    // Fallback: stupid-bot logic
-                    if (stupidBot.isTriggerMessage(messageText)) {
-                        logger.info(`🤖 [STUPID-BOT] Trigger detected from ${chatId}: "${messageText}"`);
-                        await stupidBot.handleTriggerMessage(client, chatId, logger, dbPool);
                     }
                 } catch (error) {
                     logger.error('🤖 Error processing message:', error);
