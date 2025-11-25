@@ -1456,7 +1456,7 @@ app.post('/api/admin/clear-session', async (req, res) => {
         }
 
         const result = await dbPool.query(
-            'DELETE FROM whatsapp_sessions WHERE phone_number = $1',
+            'DELETE FROM sessions WHERE phone_number = $1',
             [phone]
         );
 
