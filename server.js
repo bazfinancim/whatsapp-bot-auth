@@ -1443,6 +1443,34 @@ app.post('/api/typing', async (req, res) => {
     }
 });
 
+// Admin endpoint to clear user session (for testing)
+app.post('/api/admin/clear-session', async (req, res) => {
+    try {
+        const { phone } = req.body;
+
+        if (!phone) {
+            return res.status(400).json({
+                success: false,
+                error: 'Phone number is required'
+            });
+        }
+
+        const result = await dbPool.query(
+            'DELETE FROM whatsapp_sessions WHERE phone_number = $1',
+            [phone]
+        );
+
+        res.json({
+            success: true,
+            message: `Session cleared for ${phone}`,
+            rowsDeleted: result.rowCount
+        });
+    } catch (error) {
+        logger.error('Error clearing session:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.get('/api/status', (req, res) => {
     res.json({
         status: connectionStatus,
