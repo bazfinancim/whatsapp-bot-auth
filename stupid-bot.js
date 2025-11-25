@@ -24,7 +24,7 @@ const BOT_CONFIG = {
 
         // Message #2: Chatbot link (2 seconds after introduction)
         chatbotLink: process.env.BOT_CHATBOT_LINK_MESSAGE ||
-            '📝 הכנתי לכם 10 שאלות קצרות כדי שאוכל לתפוף את עולמכם הפיננסי בהתאמה אישית\n\nכנסו ללינק:\n👇🏻👇🏻👇🏻👇🏻👇🏻👇🏻\n\n{chatbotUrl}\n\n💥הקישור תקף ל-24 שעות💥',
+            '📝 הכנתי לכם 10 שאלות קצרות כדי שאוכל למפות את עולמכם הפיננסי בהתאמה אישית\n\nכנסו ללינק:\n👇🏻👇🏻👇🏻👇🏻👇🏻👇🏻\n\n{chatbotUrl}\n\n💥הקישור תקף ל-24 שעות💥',
 
         // Message #4: Video testimonial caption
         videoCaption: process.env.BOT_VIDEO_CAPTION ||
