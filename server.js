@@ -1455,15 +1455,20 @@ app.post('/api/admin/clear-session', async (req, res) => {
             });
         }
 
+        // Clear from database
         const result = await dbPool.query(
             'DELETE FROM sessions WHERE phone_number = $1',
             [phone]
         );
 
+        // Clear from in-memory pendingUsers map
+        const wasInMemory = stupidBot.clearPendingUser(phone);
+
         res.json({
             success: true,
             message: `Session cleared for ${phone}`,
-            rowsDeleted: result.rowCount
+            rowsDeleted: result.rowCount,
+            clearedFromMemory: wasInMemory
         });
     } catch (error) {
         logger.error('Error clearing session:', error);

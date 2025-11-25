@@ -609,6 +609,15 @@ async function getBotStatus(dbPool = null) {
  * Clear pending users and sessions (for testing/admin purposes)
  * Now also clears database
  */
+/**
+ * Clear a single pending user from memory
+ */
+function clearPendingUser(phoneNumber) {
+    const wasPresent = pendingUsers.has(phoneNumber);
+    pendingUsers.delete(phoneNumber);
+    return wasPresent;
+}
+
 async function clearPendingUsers(dbPool = null) {
     const pendingCount = pendingUsers.size;
     const sessionCount = sessionMap.size;
@@ -645,6 +654,7 @@ module.exports = {
     handleTriggerMessage,
     handleFormCompletion,
     getBotStatus,
+    clearPendingUser,      // Clear single pending user
     clearPendingUsers,
     cleanupExpiredSessions,  // New: for automatic cleanup
     extractPhoneNumber,
