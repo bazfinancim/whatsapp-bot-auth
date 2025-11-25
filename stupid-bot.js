@@ -380,34 +380,10 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
             return;
         }
 
-        // Call avi-website API to create session
-        const aviWebsiteApiUrl = process.env.AVI_WEBSITE_API_URL || 'https://avi-website-frankfurt.onrender.com';
-        logger.info(`🤖 [STUPID-BOT] Calling avi-website API at ${aviWebsiteApiUrl}/api/whatsapp/message`);
-
-        const response = await fetch(`${aviWebsiteApiUrl}/api/whatsapp/message`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                phone: phoneNumber,
-                message: 'start',
-                name: phoneNumber // Use phone as name for now
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`Avi-website API returned ${response.status}: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        const chatbotUrl = data.chatbotUrl;
-
-        if (!chatbotUrl) {
-            throw new Error('No chatbotUrl returned from avi-website API');
-        }
-
-        // Extract session ID from URL for local tracking
-        const sessionId = new URL(chatbotUrl).searchParams.get('session');
-        logger.info(`🤖 [STUPID-BOT] Received session ${sessionId} from avi-website`);
+        // Generate session ID and construct chatbot URL locally
+        const sessionId = `${phoneNumber}-${Date.now()}`;
+        const chatbotUrl = `${BOT_CONFIG.formUrl}?session=${sessionId}`;
+        logger.info(`🤖 [STUPID-BOT] Generated session ${sessionId} for ${phoneNumber}`);
 
         // Save session to local database for lookup when form completion webhook comes
         await saveSession(sessionId, chatId, phoneNumber, dbPool);
