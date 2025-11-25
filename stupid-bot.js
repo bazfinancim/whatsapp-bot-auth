@@ -22,7 +22,7 @@ const BOT_CONFIG = {
         introduction: process.env.BOT_INTRODUCTION_MESSAGE ||
             'תודה שפנית, נעים מאוד אבי ישי! 😊\n\nככלכן בעל תואר B.A במנהל עסקים ובעל רישיון פנסיוני, מעל 20 שנה בתחום ובעלים של בז פיננסים חברה שמעניקה פתרונות במגוון תחומים:\n\n✅ ליווי ייעוץ עסקי ובנייית מודלים כלכליים\n✅ ניתוח תיק פנסיוני\n✅ תכנון פיננסי מקיף\n✅ ייעוץ ותכנון פרישה\n✅ ניהול השקעות\n✅ פתרונות ביטוח\n✅ ייעוץ משכנתאות ופתרונות אשראי נוספים',
 
-        // Message #2: Chatbot link (5 seconds after introduction)
+        // Message #2: Chatbot link (2 seconds after introduction)
         chatbotLink: process.env.BOT_CHATBOT_LINK_MESSAGE ||
             '📝 הכנתי לכם 10 שאלות קצרות כדי שאוכל לתפוף את עולמכם הפיננסי בהתאמה אישית\n\nכנסו ללינק:\n👇🏻👇🏻👇🏻👇🏻👇🏻👇🏻\n\n{chatbotUrl}\n\n💥הקישור תקף ל-24 שעות💥',
 
@@ -403,16 +403,16 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
         const totalSessions = await getActiveSessionsCount(dbPool);
         logger.info(`🤖 [STUPID-BOT] Session ${sessionId} saved to database (${totalSessions} active sessions)`);
 
-        // Message #2: Send chatbot link after 5 seconds
+        // Message #2: Send chatbot link after 2 seconds
         setTimeout(async () => {
             try {
                 const chatbotLinkMessage = BOT_CONFIG.messages.chatbotLink.replace('{chatbotUrl}', chatbotUrl);
                 await client.sendMessage(chatId, { text: chatbotLinkMessage });
-                logger.info(`🤖 [STUPID-BOT] Sent chatbot link to ${phoneNumber} (5 seconds after introduction)`);
+                logger.info(`🤖 [STUPID-BOT] Sent chatbot link to ${phoneNumber} (2 seconds after introduction)`);
             } catch (error) {
                 logger.error(`🤖 [STUPID-BOT] Error sending chatbot link:`, error);
             }
-        }, 5000); // 5 seconds
+        }, 2000); // 2 seconds
     } catch (error) {
         logger.error('🤖 [STUPID-BOT] Error handling trigger message:', error);
 
