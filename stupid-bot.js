@@ -8,7 +8,7 @@
 // Configuration
 const BOT_CONFIG = {
     // Trigger keywords (case-insensitive)
-    triggerKeywords: (process.env.BOT_TRIGGER_KEYWORDS || 'start,register,התחל,רישום,התחילו').split(',').map(k => k.trim().toLowerCase()),
+    triggerKeywords: (process.env.BOT_TRIGGER_KEYWORDS || 'start,reset,register,התחל,רישום,התחילו,אשמח לשמוע על ליווי לפרישה').split(',').map(k => k.trim().toLowerCase()),
 
     // Form URL to send to users
     formUrl: process.env.BOT_FORM_URL || 'https://baz-f.co.il/chatbot',
