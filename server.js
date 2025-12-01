@@ -36,18 +36,25 @@ let isBotEnabled = false;
 
 // CORS configuration - environment-based origins
 const getAllowedOrigins = () => {
+    // Always include bot frontend URL
+    const baseOrigins = [
+        'https://whatsapp-bot-frontend-ujd6.onrender.com',
+        process.env.ADDITIONAL_ORIGIN
+    ].filter(Boolean);
+
     if (process.env.NODE_ENV === 'production') {
         // Production: Allow both production and test frontend URLs
         return [
+            ...baseOrigins,
             'https://whatsapp-react-web-prod.onrender.com',
             'https://whatsapp-react-web-test.onrender.com',
-            'https://whatsapp-dashboard-production.onrender.com',
-            process.env.ADDITIONAL_ORIGIN // For flexibility
-        ].filter(Boolean);
+            'https://whatsapp-dashboard-production.onrender.com'
+        ];
     }
 
     // Development & Staging: Allow localhost and staging URLs
     return [
+        ...baseOrigins,
         'http://localhost:5173',  // Vite dev server (web app)
         'http://localhost:3000',  // Next.js dev server (dashboard)
         'http://localhost:1100',
