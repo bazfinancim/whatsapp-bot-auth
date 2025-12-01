@@ -372,11 +372,8 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
         const isPending = await checkPendingUser(phoneNumber, dbPool);
         if (isPending) {
             const userData = await getPendingUserData(phoneNumber, dbPool);
-            logger.info(`🤖 [STUPID-BOT] User ${phoneNumber} already pending (since ${userData.timestamp})`);
-
-            // Send "already registered" message
-            await client.sendMessage(chatId, { text: BOT_CONFIG.messages.alreadyRegistered });
-            logger.info(`🤖 [STUPID-BOT] Sent "already registered" message to ${phoneNumber}`);
+            logger.info(`🤖 [STUPID-BOT] User ${phoneNumber} already pending (since ${userData.timestamp}) - ignoring`);
+            // Don't send any message - just ignore silently
             return;
         }
 
