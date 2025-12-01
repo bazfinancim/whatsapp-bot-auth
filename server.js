@@ -107,6 +107,9 @@ const createLogger = () => {
                 console.log(message, data || '');
             }
         },
+        warn: (message, data = null) => {
+            console.warn(message, data || '');
+        },
         error: (message, error = null) => {
             console.error(message, error || '');
         },
@@ -1221,153 +1224,44 @@ app.post('/api/auth/send', messageLimiter, async (req, res) => {
 });
 
 // Bridge-compatible endpoints for web app integration
+// NOTE: This bot uses Baileys which doesn't support getChats() like whatsapp-web.js
+// Chat history viewing is not available in this service
 app.get('/api/chats', async (req, res) => {
     try {
         if (!isAuthenticated || !client) {
-            return res.json({ success: true, data: [] }); // Return in expected format
+            return res.json({ success: true, data: [] });
         }
 
-        // Add 10-second timeout to prevent hanging
-        const chats = await Promise.race([
-            client.getChats(),
-            new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('getChats() timed out after 10s')), 10000)
-            )
-        ]);
+        // Baileys doesn't have getChats() - return empty with message
+        logger.info('📊 [GET-CHATS] Chat listing not available (Baileys limitation)');
 
-        // OPTIMIZED: Return basic chat info immediately without fetching contacts
-        // This prevents timeout with large contact lists (341+ chats)
-        const chatList = chats.map(chat => ({
-            id: chat.id._serialized,
-            name: chat.name || 'Unknown',
-            pushname: null, // Contact details can be fetched separately if needed
-            savedName: null,
-            isMyContact: false,
-            isGroup: chat.isGroup,
-            unreadCount: chat.unreadCount,
-            lastMessage: chat.lastMessage ? {
-                body: chat.lastMessage.body,
-                timestamp: chat.lastMessage.timestamp,
-                from: chat.lastMessage.from
-            } : null
-        }));
-
-        // PRIVACY: Log chats with unread counts (PII-safe)
-        const chatsWithUnread = chatList.filter(c => c.unreadCount > 0);
-        if (chatsWithUnread.length > 0) {
-            logger.info(`📊 [GET-CHATS] Found ${chatsWithUnread.length} chats with unread messages`);
-            // Production: no names/IDs logged. Development: full details
-            logger.debug('[GET-CHATS] Chat details:', chatsWithUnread.map(c => ({
-                name: c.name,
-                id: c.id,
-                unreadCount: c.unreadCount
-            })));
-        }
-
-        logger.info(`✅ [GET-CHATS] Returning ${chatList.length} total chats (FAST mode - no contact fetching)`);
-
-        // Track successful fetch for health monitoring
-        lastSuccessfulChatsFetch = Date.now();
-        consecutiveFailures = 0;
-
-        res.json({ success: true, data: chatList });
+        res.json({
+            success: true,
+            data: [],
+            message: 'Chat history viewing is not available in this bot service. Use the CSX frontend for chat viewing.'
+        });
     } catch (error) {
         logger.error(`❌ [GET-CHATS] Error: ${error.message}`);
-
-        // Track failure for health monitoring
-        consecutiveFailures++;
-        logger.warn(`⚠️ [HEALTH] Consecutive failures: ${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}`);
-
-        // If timeout, suggest client may be hung
-        if (error.message.includes('timed out')) {
-            logger.warn('⚠️ [GET-CHATS] WhatsApp client appears to be hung. May need restart.');
-
-            // Trigger automatic recovery if too many failures
-            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                logger.error(`🚨 [HEALTH] Max consecutive failures reached (${MAX_CONSECUTIVE_FAILURES}). Auto-recovery needed.`);
-                // Recovery will be triggered by the periodic health check
-            }
-
-            return res.json({
-                success: false,
-                data: [],
-                error: 'WhatsApp client is not responding. Please refresh the page or contact support.'
-            });
-        }
-
         res.json({ success: false, data: [], error: error.message });
     }
 });
 
+// NOTE: Baileys doesn't support getChatById/fetchMessages like whatsapp-web.js
 app.get('/api/messages', async (req, res) => {
-    try {
-        if (!isAuthenticated || !client) {
-            return res.json({ success: true, data: [] });
-        }
-
-        const { chatId, limit: queryLimit } = req.query;
-        if (!chatId) {
-            return res.json({ success: true, data: [] });
-        }
-
-        // Get limit from query string, default to 500 (increased from 200)
-        const limit = parseInt(queryLimit) || 500;
-
-        const chat = await client.getChatById(chatId);
-        const messages = await chat.fetchMessages({ limit: limit });
-
-        const messageList = messages.map(msg => ({
-            id: msg.id._serialized,
-            body: msg.body,
-            from: msg.from,
-            timestamp: msg.timestamp,
-            fromMe: msg.fromMe,
-            type: msg.type,
-            hasMedia: msg.hasMedia
-        }));
-
-        res.json({ success: true, data: messageList });
-    } catch (error) {
-        console.error('Error fetching messages:', error);
-        res.json({ success: false, data: [], error: error.message });
-    }
+    res.json({
+        success: true,
+        data: [],
+        message: 'Message history viewing is not available in this bot service.'
+    });
 });
 
-// Add messages endpoint with chatId in path (for compatibility)
+// NOTE: Baileys doesn't support getChatById/fetchMessages like whatsapp-web.js
 app.get('/api/messages/:chatId', async (req, res) => {
-    try {
-        if (!isAuthenticated || !client) {
-            return res.json({ success: true, data: [] });
-        }
-
-        const { chatId } = req.params;
-        if (!chatId) {
-            return res.json({ success: true, data: [] });
-        }
-
-        // Get limit from query string, default to 500 (increased from 200)
-        const limit = parseInt(req.query.limit) || 500;
-
-        const decodedChatId = decodeURIComponent(chatId);
-        const chat = await client.getChatById(decodedChatId);
-        const messages = await chat.fetchMessages({ limit: limit });
-
-        const messageList = messages.map(msg => ({
-            id: msg.id._serialized,
-            text: msg.body, // Use 'text' field for compatibility
-            body: msg.body,
-            from: msg.from,
-            timestamp: msg.timestamp,
-            fromMe: msg.fromMe,
-            type: msg.type,
-            hasMedia: msg.hasMedia
-        }));
-
-        res.json({ success: true, data: messageList });
-    } catch (error) {
-        console.error('Error fetching messages:', error);
-        res.json({ success: false, data: [], error: error.message });
-    }
+    res.json({
+        success: true,
+        data: [],
+        message: 'Message history viewing is not available in this bot service.'
+    });
 });
 
 // Download media for a specific message
