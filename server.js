@@ -392,9 +392,39 @@ async function initializeWhatsApp() {
     const sessionPath = process.env.WHATSAPP_SESSION_PATH || './whatsapp-sessions';
     console.log(`Using session storage at: ${sessionPath}`);
 
+    // Helper function to clear corrupted session
+    const clearCorruptedSession = () => {
+        console.log('🗑️  Clearing corrupted session files...');
+        try {
+            if (fs.existsSync(sessionPath)) {
+                fs.rmSync(sessionPath, { recursive: true, force: true });
+                console.log('✅ Corrupted session files cleared');
+            }
+        } catch (e) {
+            console.error('Failed to clear session:', e.message);
+        }
+    };
+
+    // Check for forced session reset (useful after Baileys version upgrade)
+    if (process.env.FORCE_SESSION_RESET === 'true') {
+        console.log('⚠️  FORCE_SESSION_RESET is set - clearing session before startup');
+        clearCorruptedSession();
+    }
+
     try {
         // Initialize auth state (replaces LocalAuth)
-        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+        let authResult;
+        try {
+            authResult = await useMultiFileAuthState(sessionPath);
+        } catch (sessionError) {
+            // Session files are corrupted (e.g., Bad MAC error after Baileys upgrade)
+            console.error('⚠️  Session initialization failed:', sessionError.message);
+            console.log('🔄 Attempting recovery by clearing corrupted session...');
+            clearCorruptedSession();
+            // Retry with fresh session
+            authResult = await useMultiFileAuthState(sessionPath);
+        }
+        const { state, saveCreds } = authResult;
 
         // Get latest WhatsApp Web version
         const { version, isLatest } = await fetchLatestBaileysVersion();
