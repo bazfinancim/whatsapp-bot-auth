@@ -2024,6 +2024,40 @@ app.post('/api/contacts/lookup', async (req, res) => {
     }
 });
 
+// Query sessions by chat_id pattern (for finding LID users who completed forms)
+app.get('/api/sessions/search', async (req, res) => {
+    try {
+        if (!dbPool) {
+            return res.status(503).json({ error: 'Database not available' });
+        }
+
+        const { chat_id, phone, status } = req.query;
+        let query = 'SELECT session_id, phone_number, chat_id, status, created_at, form_data FROM sessions WHERE 1=1';
+        const params = [];
+
+        if (chat_id) {
+            params.push(`%${chat_id}%`);
+            query += ` AND chat_id LIKE $${params.length}`;
+        }
+        if (phone) {
+            params.push(`%${phone}%`);
+            query += ` AND phone_number LIKE $${params.length}`;
+        }
+        if (status) {
+            params.push(status);
+            query += ` AND status = $${params.length}`;
+        }
+
+        query += ' ORDER BY created_at DESC LIMIT 50';
+
+        const result = await dbPool.query(query, params);
+        res.json({ count: result.rows.length, sessions: result.rows });
+    } catch (error) {
+        console.error('Error searching sessions:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Start server
 app.listen(port, async () => {
     console.log(`WhatsApp Auth Service running on port ${port}`);
