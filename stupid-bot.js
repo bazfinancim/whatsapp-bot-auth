@@ -50,6 +50,36 @@ const pendingUsers = new Map();
 // This maps unique session IDs to the original WhatsApp sender
 const sessionMap = new Map();
 
+// Make.com webhook URL for Monday.com integration
+const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || 'https://hook.eu2.make.com/yyci6swodxsfq23kjvolcocuaujes78e';
+
+/**
+ * Send lead data to Make.com webhook (creates Monday.com item)
+ * Called immediately when someone triggers the bot
+ */
+async function sendLeadToWebhook(data, logger) {
+    try {
+        logger.info(`📤 [WEBHOOK] Sending lead to Make.com: ${data.phone} (${data.name})`);
+
+        const response = await fetch(MAKE_WEBHOOK_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (!response.ok) {
+            throw new Error(`Webhook returned ${response.status}`);
+        }
+
+        logger.info(`✅ [WEBHOOK] Lead sent successfully for ${data.phone}`);
+        return true;
+    } catch (error) {
+        logger.error(`❌ [WEBHOOK] Failed to send lead: ${error.message}`);
+        // Don't throw - we don't want to fail the bot flow if webhook fails
+        return false;
+    }
+}
+
 /**
  * Check if a message contains any trigger keywords
  */
@@ -384,6 +414,19 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null, sende
 
         // Save session to local database for lookup when form completion webhook comes
         await saveSession(sessionId, chatId, phoneNumber, dbPool);
+
+        // Send lead to Make.com webhook immediately (creates Monday.com item)
+        const isLid = chatId.includes('@lid');
+        await sendLeadToWebhook({
+            phone: phoneNumber,
+            name: senderName !== 'Unknown' ? senderName : (isLid ? `ליד ${phoneNumber.slice(-4)}` : `ליד מווטסאפ`),
+            session_id: sessionId,
+            chat_id: chatId,
+            source: 'whatsapp_trigger',
+            is_lid: isLid,
+            status: 'new_lead',
+            timestamp: new Date().toISOString()
+        }, logger);
 
         // Message #1: Send introduction (immediate)
         await client.sendMessage(chatId, { text: BOT_CONFIG.messages.introduction });
