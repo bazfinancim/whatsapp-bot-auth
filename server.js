@@ -24,10 +24,18 @@ if (process.env.FORCE_SESSION_RESET === 'true') {
     console.log(`📁 [STARTUP] Session path: ${sessionPath}`);
     try {
         if (fs.existsSync(sessionPath)) {
-            fs.rmSync(sessionPath, { recursive: true, force: true });
+            // Don't delete the directory itself (it may be a mount point like /data)
+            // Instead, delete all contents inside it
+            const files = fs.readdirSync(sessionPath);
+            console.log(`📂 [STARTUP] Found ${files.length} items to delete: ${files.join(', ')}`);
+            for (const file of files) {
+                const filePath = path.join(sessionPath, file);
+                fs.rmSync(filePath, { recursive: true, force: true });
+                console.log(`🗑️  [STARTUP] Deleted: ${file}`);
+            }
             console.log('✅ [STARTUP] Session files cleared successfully');
         } else {
-            console.log('ℹ️  [STARTUP] No session files found to clear');
+            console.log('ℹ️  [STARTUP] No session directory found');
         }
     } catch (e) {
         console.error('❌ [STARTUP] Failed to clear session:', e.message);
