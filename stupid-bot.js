@@ -419,7 +419,10 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null, sende
         const isLid = chatId.includes('@lid');
         await sendLeadToWebhook({
             phone: phoneNumber,
+            phone_number: phoneNumber,  // Duplicate for Make.com mapping flexibility
+            country_code: 'IL',
             name: senderName !== 'Unknown' ? senderName : (isLid ? `ליד ${phoneNumber.slice(-4)}` : `ליד מווטסאפ`),
+            firstName: senderName !== 'Unknown' ? senderName.split(' ')[0] : '',
             session_id: sessionId,
             chat_id: chatId,
             source: 'whatsapp_trigger',
