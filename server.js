@@ -308,7 +308,7 @@ async function recoverWhatsAppClient() {
     try {
         if (client) {
             logger.info('🛑 [RECOVERY] Destroying existing client...');
-            await client.destroy();
+            client.end(new Error('Client closed'));
             client = null;
         }
 
@@ -1070,9 +1070,9 @@ app.post('/api/auth/clear-session', async (req, res) => {
     try {
         console.log('🗑️  Clearing session storage...');
 
-        // Destroy existing client
+        // Close existing client (Baileys uses end(), not destroy())
         if (client) {
-            await client.destroy();
+            client.end(new Error('Session cleared by admin'));
             client = null;
         }
 
@@ -1108,7 +1108,7 @@ app.post('/api/auth/clear-session', async (req, res) => {
 app.post('/api/auth/disconnect', async (req, res) => {
     try {
         if (client) {
-            await client.destroy();
+            client.end(new Error('Client closed'));
             client = null;
         }
 
@@ -1144,7 +1144,7 @@ app.post('/api/auth/reset', async (req, res) => {
 
         // Destroy existing client
         if (client) {
-            await client.destroy();
+            client.end(new Error('Client closed'));
             client = null;
         }
 
@@ -1935,7 +1935,7 @@ const gracefulShutdown = async (signal) => {
     if (client) {
         console.log('Destroying WhatsApp client...');
         try {
-            await client.destroy();
+            client.end(new Error('Client closed'));
             console.log('✓ WhatsApp client destroyed');
         } catch (error) {
             console.error('Error destroying client:', error.message);
