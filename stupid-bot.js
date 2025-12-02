@@ -364,7 +364,7 @@ async function cleanupExpiredSessions(dbPool) {
  * Handle trigger message - send greeting and form link
  * Now integrates with avi-website API for session management
  */
-async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
+async function handleTriggerMessage(client, chatId, logger, dbPool = null, senderName = 'Unknown') {
     try {
         const phoneNumber = extractPhoneNumber(chatId);
 
@@ -372,7 +372,7 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
         const isPending = await checkPendingUser(phoneNumber, dbPool);
         if (isPending) {
             const userData = await getPendingUserData(phoneNumber, dbPool);
-            logger.info(`🤖 [STUPID-BOT] User ${phoneNumber} already pending (since ${userData.timestamp}) - ignoring`);
+            logger.info(`🤖 [STUPID-BOT] User ${phoneNumber} (${senderName}) already pending (since ${userData.timestamp}) - ignoring`);
             // Don't send any message - just ignore silently
             return;
         }
@@ -380,7 +380,7 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null) {
         // Generate session ID and construct chatbot URL locally
         const sessionId = `${phoneNumber}-${Date.now()}`;
         const chatbotUrl = `${BOT_CONFIG.formUrl}?session=${sessionId}`;
-        logger.info(`🤖 [STUPID-BOT] Generated session ${sessionId} for ${phoneNumber}`);
+        logger.info(`🤖 [STUPID-BOT] Generated session ${sessionId} for ${phoneNumber} (${senderName})`);
 
         // Save session to local database for lookup when form completion webhook comes
         await saveSession(sessionId, chatId, phoneNumber, dbPool);

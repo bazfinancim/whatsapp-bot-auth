@@ -582,8 +582,9 @@ async function initializeWhatsApp() {
 
                     // Check for trigger message FIRST (stupid-bot has priority)
                     if (stupidBot.isTriggerMessage(messageText)) {
-                        logger.info(`🤖 [STUPID-BOT] Trigger detected from ${chatId}: "${messageText}"`);
-                        await stupidBot.handleTriggerMessage(client, chatId, logger, dbPool);
+                        const senderName = msg.pushName || 'Unknown';
+                        logger.info(`🤖 [STUPID-BOT] Trigger from ${chatId} (${senderName}): "${messageText}"`);
+                        await stupidBot.handleTriggerMessage(client, chatId, logger, dbPool, senderName);
                         return; // Message handled by stupid-bot
                     }
 
