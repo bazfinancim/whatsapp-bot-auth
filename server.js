@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const QRCode = require('qrcode');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeInMemoryStore } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeInMemoryStore, jidNormalizedUser } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const P = require('pino');
 const rateLimit = require('express-rate-limit');
@@ -183,6 +183,61 @@ let qrString = null;
 let isConnected = false;
 let isAuthenticated = false;
 
+// In-memory store for LID mapping and chat history
+const store = makeInMemoryStore({
+    logger: P({ level: 'silent' })
+});
+// Store will be bound to client events after socket creation
+
+/**
+ * Resolve LID (Linked ID) to real phone number
+ * Meta uses LID format (XXXXXX@lid) for privacy, but we need the real phone number
+ * @param {string} jid - The JID (can be phone@s.whatsapp.net or lid@lid)
+ * @param {object} msg - The message object (may contain remoteJidAlt)
+ * @returns {string} - Resolved JID with real phone number
+ */
+function resolveLidToPhone(jid, msg = null) {
+    if (!jid) return jid;
+
+    // Check if this is a LID format
+    if (jid.includes('@lid')) {
+        const lid = jid.split('@')[0];
+        logger.info(`🔍 [LID-RESOLVE] Resolving LID: ${lid}`);
+
+        // Method 1: Check message's remoteJidAlt field (alternate JID with real phone)
+        if (msg?.key?.remoteJidAlt) {
+            logger.info(`✅ [LID-RESOLVE] Found remoteJidAlt: ${msg.key.remoteJidAlt}`);
+            return msg.key.remoteJidAlt;
+        }
+
+        // Method 2: Check store's lidMapping
+        if (store?.lidMapping) {
+            try {
+                const phoneNumber = store.lidMapping.getPNForLID?.(lid);
+                if (phoneNumber) {
+                    logger.info(`✅ [LID-RESOLVE] Found in lidMapping: ${phoneNumber}`);
+                    return `${phoneNumber}@s.whatsapp.net`;
+                }
+            } catch (e) {
+                logger.debug(`[LID-RESOLVE] lidMapping.getPNForLID error: ${e.message}`);
+            }
+        }
+
+        // Method 3: Check if msg has participant field (contains real JID in groups)
+        if (msg?.key?.participant) {
+            logger.info(`✅ [LID-RESOLVE] Found participant: ${msg.key.participant}`);
+            return msg.key.participant;
+        }
+
+        // Fallback: Return original LID (bot will use it as-is)
+        logger.warn(`⚠️ [LID-RESOLVE] Could not resolve LID ${lid}, using as-is`);
+        return jid;
+    }
+
+    // Not a LID, return as-is
+    return jid;
+}
+
 // Health monitoring variables
 let lastSuccessfulChatsFetch = null;
 let consecutiveFailures = 0;
@@ -355,6 +410,9 @@ async function initializeWhatsApp() {
             markOnlineOnConnect: true
         });
 
+        // Bind store to client events (enables LID mapping and chat history)
+        store.bind(client.ev);
+
         // Event: Save credentials on update (CRITICAL for persistence)
         client.ev.on('creds.update', saveCreds);
 
@@ -474,7 +532,14 @@ async function initializeWhatsApp() {
 
                     if (!messageText) continue;
 
-                    const chatId = msg.key.remoteJid;
+                    // Resolve LID to real phone number if needed
+                    const rawChatId = msg.key.remoteJid;
+                    const chatId = resolveLidToPhone(rawChatId, msg);
+
+                    // Log if LID was resolved
+                    if (rawChatId !== chatId) {
+                        logger.info(`📱 [LID-RESOLVED] ${rawChatId} -> ${chatId}`);
+                    }
 
                     // Check for trigger message FIRST (stupid-bot has priority)
                     if (stupidBot.isTriggerMessage(messageText)) {
