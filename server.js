@@ -1932,6 +1932,98 @@ app.post('/api/bot/clear-pending', async (req, res) => {
     }
 });
 
+// Lookup contact info (name, status) for a JID or phone number
+app.get('/api/contact/:jid', async (req, res) => {
+    try {
+        if (!isAuthenticated || !client) {
+            return res.status(503).json({ error: 'WhatsApp not authenticated' });
+        }
+
+        let { jid } = req.params;
+
+        // Normalize JID format
+        if (!jid.includes('@')) {
+            jid = `${jid}@s.whatsapp.net`;
+        }
+
+        const result = { jid };
+
+        // Try to get status (about text)
+        try {
+            const status = await client.fetchStatus(jid);
+            if (status) {
+                result.status = status.status;
+                result.setAt = status.setAt;
+            }
+        } catch (e) {
+            result.statusError = e.message;
+        }
+
+        // Try to get profile picture URL
+        try {
+            const ppUrl = await client.profilePictureUrl(jid, 'image');
+            result.profilePicture = ppUrl;
+        } catch (e) {
+            result.profilePictureError = e.message;
+        }
+
+        // Try onWhatsApp check (only works with phone numbers, not LIDs)
+        if (jid.includes('@s.whatsapp.net')) {
+            try {
+                const [exists] = await client.onWhatsApp(jid.replace('@s.whatsapp.net', ''));
+                if (exists) {
+                    result.exists = true;
+                    result.verifiedName = exists.verifiedName;
+                }
+            } catch (e) {
+                result.onWhatsAppError = e.message;
+            }
+        }
+
+        res.json(result);
+    } catch (error) {
+        console.error('Error fetching contact info:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Bulk lookup contacts - get info for multiple JIDs
+app.post('/api/contacts/lookup', async (req, res) => {
+    try {
+        if (!isAuthenticated || !client) {
+            return res.status(503).json({ error: 'WhatsApp not authenticated' });
+        }
+
+        const { jids } = req.body;
+        if (!jids || !Array.isArray(jids)) {
+            return res.status(400).json({ error: 'jids array required' });
+        }
+
+        const results = [];
+        for (const jid of jids) {
+            try {
+                const normalizedJid = jid.includes('@') ? jid : `${jid}@s.whatsapp.net`;
+                const info = { jid: normalizedJid };
+
+                // Try to get status
+                try {
+                    const status = await client.fetchStatus(normalizedJid);
+                    if (status) info.status = status.status;
+                } catch (e) {}
+
+                results.push(info);
+            } catch (e) {
+                results.push({ jid, error: e.message });
+            }
+        }
+
+        res.json({ results });
+    } catch (error) {
+        console.error('Error bulk lookup:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Start server
 app.listen(port, async () => {
     console.log(`WhatsApp Auth Service running on port ${port}`);
