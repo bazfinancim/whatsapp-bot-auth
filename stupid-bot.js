@@ -217,6 +217,25 @@ async function deleteSession(sessionId, dbPool) {
 }
 
 /**
+ * Mark form as sent (for reminder system)
+ * Sets form_sent_at timestamp so reminders can be scheduled
+ */
+async function markFormSent(sessionId, dbPool) {
+    if (!dbPool) return true;
+
+    try {
+        await dbPool.query(
+            `UPDATE sessions SET form_sent_at = CURRENT_TIMESTAMP WHERE session_id = $1`,
+            [sessionId]
+        );
+        return true;
+    } catch (error) {
+        console.error('Error marking form as sent:', error);
+        return false;
+    }
+}
+
+/**
  * Mark session as completed (for reminder system)
  * Sets form_completed_at and appointment_sent_at timestamps
  */
@@ -452,6 +471,10 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null, sende
                 const chatbotLinkMessage = BOT_CONFIG.messages.chatbotLink.replace('{chatbotUrl}', chatbotUrl);
                 await client.sendMessage(chatId, { text: chatbotLinkMessage });
                 logger.info(`🤖 [STUPID-BOT] Sent chatbot link to ${phoneNumber} (2 seconds after introduction)`);
+
+                // Mark form as sent for reminder scheduling
+                await markFormSent(sessionId, dbPool);
+                logger.info(`🤖 [STUPID-BOT] Marked form_sent_at for session ${sessionId}`);
             } catch (error) {
                 logger.error(`🤖 [STUPID-BOT] Error sending chatbot link:`, error);
             }
