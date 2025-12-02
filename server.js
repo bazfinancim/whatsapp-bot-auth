@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const QRCode = require('qrcode');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeInMemoryStore, jidNormalizedUser } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const P = require('pino');
 const rateLimit = require('express-rate-limit');
@@ -211,11 +211,8 @@ let qrString = null;
 let isConnected = false;
 let isAuthenticated = false;
 
-// In-memory store for LID mapping and chat history
-const store = makeInMemoryStore({
-    logger: P({ level: 'silent' })
-});
-// Store will be bound to client events after socket creation
+// Note: makeInMemoryStore was removed from Baileys 6.7.x
+// LID resolution now relies on message fields (remoteJidAlt, participant)
 
 /**
  * Resolve LID (Linked ID) to real phone number
@@ -238,20 +235,7 @@ function resolveLidToPhone(jid, msg = null) {
             return msg.key.remoteJidAlt;
         }
 
-        // Method 2: Check store's lidMapping
-        if (store?.lidMapping) {
-            try {
-                const phoneNumber = store.lidMapping.getPNForLID?.(lid);
-                if (phoneNumber) {
-                    logger.info(`✅ [LID-RESOLVE] Found in lidMapping: ${phoneNumber}`);
-                    return `${phoneNumber}@s.whatsapp.net`;
-                }
-            } catch (e) {
-                logger.debug(`[LID-RESOLVE] lidMapping.getPNForLID error: ${e.message}`);
-            }
-        }
-
-        // Method 3: Check if msg has participant field (contains real JID in groups)
+        // Method 2: Check if msg has participant field (contains real JID in groups)
         if (msg?.key?.participant) {
             logger.info(`✅ [LID-RESOLVE] Found participant: ${msg.key.participant}`);
             return msg.key.participant;
@@ -467,9 +451,6 @@ async function initializeWhatsApp() {
             browser: ['WhatsApp Bot', 'Chrome', '110.0.0'],
             markOnlineOnConnect: true
         });
-
-        // Bind store to client events (enables LID mapping and chat history)
-        store.bind(client.ev);
 
         // Event: Save credentials on update (CRITICAL for persistence)
         client.ev.on('creds.update', saveCreds);
