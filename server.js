@@ -14,6 +14,26 @@ const stupidBot = require('./stupid-bot');
 const { migrateReminderColumns } = require('./lib/database-migration');
 const { initializeScheduler, checkAndSendReminders, getReminderStats } = require('./lib/reminder-scheduler');
 
+// =============================================================================
+// IMMEDIATE SESSION RESET (runs BEFORE server starts)
+// This is critical for recovering from Baileys version upgrades
+// =============================================================================
+if (process.env.FORCE_SESSION_RESET === 'true') {
+    const sessionPath = process.env.WHATSAPP_SESSION_PATH || './whatsapp-sessions';
+    console.log('⚠️  [STARTUP] FORCE_SESSION_RESET is set - clearing session IMMEDIATELY');
+    console.log(`📁 [STARTUP] Session path: ${sessionPath}`);
+    try {
+        if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+            console.log('✅ [STARTUP] Session files cleared successfully');
+        } else {
+            console.log('ℹ️  [STARTUP] No session files found to clear');
+        }
+    } catch (e) {
+        console.error('❌ [STARTUP] Failed to clear session:', e.message);
+    }
+}
+
 const app = express();
 const port = process.env.PORT || 10000;
 
