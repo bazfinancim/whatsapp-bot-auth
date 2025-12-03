@@ -224,10 +224,12 @@ let isAuthenticated = false;
 function resolveLidToPhone(jid, msg = null) {
     if (!jid) return jid;
 
-    // Check if this is a LID format
-    if (jid.includes('@lid')) {
-        const lid = jid.split('@')[0];
-        logger.info(`🔍 [LID-RESOLVE] Resolving LID: ${lid}`);
+    const number = jid.split('@')[0];
+    // Detect LID by @lid suffix OR by length (LIDs are 15+ digits, real phones are 10-13)
+    const isLid = jid.includes('@lid') || number.length >= 15;
+
+    if (isLid) {
+        logger.info(`🔍 [LID-RESOLVE] Detected LID: ${number} (length: ${number.length})`);
 
         // Method 1: Check message's remoteJidAlt field (alternate JID with real phone)
         if (msg?.key?.remoteJidAlt) {
@@ -242,7 +244,7 @@ function resolveLidToPhone(jid, msg = null) {
         }
 
         // Fallback: Return original LID (bot will use it as-is)
-        logger.warn(`⚠️ [LID-RESOLVE] Could not resolve LID ${lid}, using as-is`);
+        logger.warn(`⚠️ [LID-RESOLVE] Could not resolve LID ${number}, using as-is`);
         return jid;
     }
 
