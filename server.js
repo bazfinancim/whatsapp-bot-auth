@@ -8,7 +8,8 @@ const rateLimit = require('express-rate-limit');
 const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
-const cron = require('node-cron');
+// REMOVED: node-cron no longer used - Bull queue handles all scheduling
+// const cron = require('node-cron');
 const axios = require('axios');
 const stupidBot = require('./stupid-bot');
 const { migrateReminderColumns } = require('./lib/database-migration');
@@ -554,10 +555,10 @@ async function initializeWhatsApp() {
                     }
                 }
 
-                // Start periodic health monitoring (every 5 minutes)
-                cron.schedule('*/5 * * * *', async () => {
+                // Start periodic health monitoring (every 5 minutes) - using setInterval instead of cron
+                setInterval(async () => {
                     await performPeriodicHealthCheck();
-                });
+                }, 5 * 60 * 1000); // 5 minutes in milliseconds
                 logger.info('🏥 Health monitoring started (checking every 5 minutes)');
             }
 
@@ -1963,6 +1964,88 @@ app.get('/api/bot/session-messages', async (req, res) => {
         });
     } catch (error) {
         logger.error('Error listing session messages:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Send manual message to a session (for contacting LID users)
+app.post('/api/bot/send-manual', async (req, res) => {
+    try {
+        const { session_id, message, chat_id } = req.body;
+
+        if (!message) {
+            return res.status(400).json({ success: false, error: 'Message is required' });
+        }
+
+        // Get chat_id from session if not provided directly
+        let targetChatId = chat_id;
+        if (!targetChatId && session_id) {
+            const result = await dbPool.query(
+                'SELECT chat_id FROM sessions WHERE session_id = $1',
+                [session_id]
+            );
+            if (result.rows.length > 0) {
+                targetChatId = result.rows[0].chat_id;
+            }
+        }
+
+        if (!targetChatId) {
+            return res.status(400).json({ success: false, error: 'No chat_id found' });
+        }
+
+        // Send message via Baileys
+        if (!client) {
+            return res.status(503).json({ success: false, error: 'WhatsApp client not connected' });
+        }
+
+        await client.sendMessage(targetChatId, { text: message });
+        logger.info(`📤 [MANUAL] Sent message to ${targetChatId}`);
+
+        res.json({ success: true, chatId: targetChatId });
+    } catch (error) {
+        logger.error('Error sending manual message:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// List all sessions with their status
+app.get('/api/bot/sessions', async (req, res) => {
+    try {
+        const { status } = req.query; // optional filter: 'active', 'completed', 'expired'
+        let query = `
+            SELECT session_id, phone_number, chat_id, status,
+                   created_at, expires_at, form_sent_at, form_completed_at,
+                   appointment_sent_at, form_data
+            FROM sessions
+        `;
+        const params = [];
+
+        if (status) {
+            query += ` WHERE status = $1`;
+            params.push(status);
+        }
+
+        query += ` ORDER BY created_at DESC LIMIT 50`;
+
+        const result = await dbPool.query(query, params);
+        res.json({
+            success: true,
+            count: result.rows.length,
+            sessions: result.rows.map(row => ({
+                sessionId: row.session_id,
+                phone: row.phone_number,
+                chatId: row.chat_id,
+                status: row.status,
+                createdAt: row.created_at,
+                expiresAt: row.expires_at,
+                formSentAt: row.form_sent_at,
+                formCompletedAt: row.form_completed_at,
+                appointmentSentAt: row.appointment_sent_at,
+                formData: row.form_data
+            }))
+        });
+    } catch (error) {
+        logger.error('Error listing sessions:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
