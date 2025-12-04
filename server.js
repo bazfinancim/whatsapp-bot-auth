@@ -1968,6 +1968,76 @@ app.get('/api/bot/session-messages', async (req, res) => {
     }
 });
 
+// Try to resolve LID to real phone number using multiple Baileys methods
+app.get('/api/bot/resolve-lid', async (req, res) => {
+    try {
+        const { lid } = req.query;
+        if (!lid) {
+            return res.status(400).json({ success: false, error: 'LID parameter required' });
+        }
+
+        if (!client) {
+            return res.status(503).json({ success: false, error: 'WhatsApp client not connected' });
+        }
+
+        const chatId = lid.includes('@') ? lid : `${lid}@lid`;
+        const results = {
+            lid: chatId,
+            methods: {}
+        };
+
+        // Method 1: Try onWhatsApp (checks if number exists)
+        try {
+            const [result] = await client.onWhatsApp(chatId);
+            results.methods.onWhatsApp = result || null;
+            if (result?.jid && result.jid !== chatId) {
+                results.resolvedPhone = result.jid;
+            }
+        } catch (e) {
+            results.methods.onWhatsApp = { error: e.message };
+        }
+
+        // Method 2: Try fetchStatus
+        try {
+            const status = await client.fetchStatus(chatId);
+            results.methods.fetchStatus = status || null;
+        } catch (e) {
+            results.methods.fetchStatus = { error: e.message };
+        }
+
+        // Method 3: Try getBusinessProfile
+        try {
+            const profile = await client.getBusinessProfile(chatId);
+            results.methods.businessProfile = profile || null;
+        } catch (e) {
+            results.methods.businessProfile = { error: e.message };
+        }
+
+        // Method 4: Check if store has contact info
+        try {
+            if (client.store?.contacts) {
+                const contact = client.store.contacts[chatId];
+                results.methods.storeContact = contact || null;
+            }
+        } catch (e) {
+            results.methods.storeContact = { error: e.message };
+        }
+
+        // Method 5: Try profilePictureUrl (sometimes reveals JID)
+        try {
+            const ppUrl = await client.profilePictureUrl(chatId, 'image');
+            results.methods.profilePicture = ppUrl ? 'has_picture' : null;
+        } catch (e) {
+            results.methods.profilePicture = { error: e.message };
+        }
+
+        res.json({ success: true, ...results });
+    } catch (error) {
+        logger.error('Error resolving LID:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // Send manual message to a session (for contacting LID users)
 app.post('/api/bot/send-manual', async (req, res) => {
     try {
