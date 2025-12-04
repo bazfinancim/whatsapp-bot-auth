@@ -53,11 +53,69 @@ const sessionMap = new Map();
 // Make.com webhook URL for Monday.com integration (legacy)
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || 'https://hook.eu2.make.com/yyci6swodxsfq23kjvolcocuaujes78e';
 
-// Avi-website API URL for direct Monday.com integration
+// Avi-website API URL for direct Monday.com integration (LEGACY - kept for fallback)
 const AVI_WEBSITE_API_URL = process.env.AVI_WEBSITE_API_URL || 'https://avi-website-frankfurt.onrender.com';
 
+// =============================================================================
+// CONSOLIDATED: Import local modules instead of calling avi-website API
+// =============================================================================
+const sessionManager = require('./lib/sessionManager');
+const { createLead } = require('./lib/mondayClient');
+const { schedule19pmReminder, scheduleVideoTestimonial } = require('./lib/messageScheduler');
+const { getNowInIsrael } = require('./lib/timezoneHelper');
+
 /**
- * Notify avi-website API to create session and Monday.com lead
+ * CONSOLIDATED: Handle trigger locally instead of calling avi-website API
+ * Creates session, Monday.com lead, and schedules reminders directly
+ */
+async function handleTriggerLocally(phoneNumber, leadName, chatId, logger) {
+    try {
+        logger.info(`📤 [LOCAL] Creating session and Monday.com lead for ${phoneNumber} (${leadName})`);
+
+        // 1. Create session in database
+        const session = await sessionManager.createSession(phoneNumber, chatId);
+        logger.info(`✅ [LOCAL] Session created: ${session.sessionId}`);
+
+        // 2. Create Monday.com lead (non-blocking)
+        createLead({ name: leadName, phone_number: phoneNumber })
+            .then(result => logger.info(`✅ [LOCAL] Monday.com lead created: ${result.itemId}`))
+            .catch(err => logger.error(`❌ [LOCAL] Monday.com error: ${err.message}`));
+
+        // 3. Schedule 19:00 form reminder
+        const now = getNowInIsrael();
+        try {
+            await schedule19pmReminder(session.sessionId, phoneNumber, session.chatbotUrl, now);
+            logger.info(`✅ [LOCAL] 19:00 reminder scheduled for ${phoneNumber}`);
+        } catch (scheduleError) {
+            logger.error(`⚠️ [LOCAL] Error scheduling 19pm reminder: ${scheduleError.message}`);
+        }
+
+        // 4. Schedule 20:00 video testimonial
+        const videoUrl = BOT_CONFIG.testimonialVideoUrl;
+        if (videoUrl) {
+            try {
+                await scheduleVideoTestimonial(session.sessionId, phoneNumber, now, videoUrl);
+                logger.info(`✅ [LOCAL] Video testimonial scheduled for ${phoneNumber}`);
+            } catch (scheduleError) {
+                logger.error(`⚠️ [LOCAL] Error scheduling video: ${scheduleError.message}`);
+            }
+        }
+
+        return {
+            session: {
+                sessionId: session.sessionId,
+                chatbotUrl: session.chatbotUrl
+            }
+        };
+    } catch (error) {
+        logger.error(`❌ [LOCAL] Failed to handle trigger locally: ${error.message}`);
+        return null;
+    }
+}
+
+/**
+ * LEGACY: Notify avi-website API to create session and Monday.com lead
+ * Kept as fallback - not used in consolidated mode
  * Called immediately when someone triggers the bot
  */
 async function notifyAviWebsite(phoneNumber, name, chatId, logger) {
@@ -464,17 +522,16 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null, sende
         const isLid = chatId.includes('@lid');
         const leadName = senderName !== 'Unknown' ? senderName : (isLid ? `ליד ${phoneNumber.slice(-4)}` : `ליד מווטסאפ`);
 
-        // Notify avi-website to create session, Monday.com lead, and send messages
-        // avi-website handles: session creation, Monday.com lead, scheduling reminders
-        // avi-website also sends chatbot link via sendWhatsAppMessage (calls back to this server)
-        const aviResult = await notifyAviWebsite(phoneNumber, leadName, chatId, logger);
+        // CONSOLIDATED: Handle locally instead of calling avi-website API
+        // Creates session, Monday.com lead, and schedules reminders directly
+        const aviResult = await handleTriggerLocally(phoneNumber, leadName, chatId, logger);
 
-        // Use avi-website's session if available, otherwise generate our own
+        // Use local session if available, otherwise generate fallback
         let sessionId, chatbotUrl;
         if (aviResult && aviResult.session) {
             sessionId = aviResult.session.sessionId;
             chatbotUrl = aviResult.session.chatbotUrl;
-            logger.info(`🤖 [STUPID-BOT] Using avi-website session: ${sessionId}`);
+            logger.info(`🤖 [STUPID-BOT] Using local session: ${sessionId}`);
         } else {
             // Fallback: generate local session (shouldn't happen normally)
             sessionId = `${phoneNumber}-${Date.now()}`;
@@ -747,6 +804,11 @@ async function clearPendingUsers(dbPool = null) {
     };
 }
 
+// Get reference to pendingUsers map for sessionManager
+function getPendingUsers() {
+    return pendingUsers;
+}
+
 module.exports = {
     isTriggerMessage,
     handleTriggerMessage,
@@ -757,5 +819,6 @@ module.exports = {
     cleanupExpiredSessions,  // New: for automatic cleanup
     extractPhoneNumber,
     formatPhoneNumber,
-    saveSession  // Export for server.js to save sessions from avi-website API
+    saveSession,  // Export for server.js to save sessions from avi-website API
+    getPendingUsers  // CONSOLIDATED: Export for sessionManager to clear pending users directly
 };

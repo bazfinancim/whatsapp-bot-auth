@@ -12,7 +12,14 @@ const cron = require('node-cron');
 const axios = require('axios');
 const stupidBot = require('./stupid-bot');
 const { migrateReminderColumns } = require('./lib/database-migration');
-const { initializeScheduler, checkAndSendReminders, getReminderStats } = require('./lib/reminder-scheduler');
+// DISABLED: node-cron reminder system replaced by Bull queue (see lib/messageScheduler.js)
+// const { initializeScheduler, checkAndSendReminders, getReminderStats } = require('./lib/reminder-scheduler');
+
+// =============================================================================
+// CONSOLIDATED: Import Bull queue scheduler and session manager (from avi-website)
+// =============================================================================
+const sessionManager = require('./lib/sessionManager');
+const { initializeWorker, setSockClient, getQueueStats } = require('./lib/messageScheduler');
 
 // =============================================================================
 // IMMEDIATE SESSION RESET (runs BEFORE server starts)
@@ -120,6 +127,15 @@ app.use(cors(corsOptions));
 // Base64 encoding adds ~33% overhead: 16MB file = ~21MB base64
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ limit: '20mb', extended: true }));
+
+// =============================================================================
+// CONSOLIDATED: Chatbot static files and form submission API
+// =============================================================================
+app.use('/chatbot', express.static(path.join(__dirname, 'chatbot')));
+app.get('/chatbot', (req, res) => {
+    res.sendFile(path.join(__dirname, 'chatbot', 'index.html'));
+});
+app.post('/api/submit-form', require('./api/submit-form'));
 
 // PRIVACY: PII-safe logger utility
 const createLogger = () => {
@@ -501,15 +517,41 @@ async function initializeWhatsApp() {
 
                 // Initialize reminder scheduler if bot is enabled and database is available
                 if (isBotEnabled && dbPool) {
-                    initializeScheduler(dbPool, client, logger);
+                    // =============================================================================
+                    // DISABLED: node-cron reminder system replaced by Bull queue
+                    // Bull queue provides persistent job scheduling (survives server restarts)
+                    // See lib/messageScheduler.js for the Bull-based scheduling system
+                    // =============================================================================
+                    // initializeScheduler(dbPool, client, logger);
+                    // const checkInterval = process.env.REMINDER_CHECK_INTERVAL || '5';
+                    // cron.schedule(`*/${checkInterval} * * * *`, async () => {
+                    //     await checkAndSendReminders();
+                    // });
+                    // logger.info(`⏰ Reminder scheduler started (checking every ${checkInterval} minutes)`);
 
-                    // Start cron job to check for reminders every 5 minutes
-                    const checkInterval = process.env.REMINDER_CHECK_INTERVAL || '5';
-                    cron.schedule(`*/${checkInterval} * * * *`, async () => {
-                        await checkAndSendReminders();
-                    });
+                    // =============================================================================
+                    // CONSOLIDATED: Initialize Bull queue worker for scheduled messages
+                    // =============================================================================
+                    try {
+                        // Set the Baileys socket for direct message sending
+                        setSockClient(client);
+                        logger.info('✅ Baileys socket client set for message scheduler');
 
-                    logger.info(`⏰ Reminder scheduler started (checking every ${checkInterval} minutes)`);
+                        // Initialize the Bull queue worker
+                        initializeWorker();
+                        logger.info('✅ Bull queue worker initialized for scheduled messages');
+
+                        // Initialize session manager database
+                        await sessionManager.initialize();
+                        logger.info('✅ Session manager database initialized');
+
+                        // Set reference to pendingUsers map for direct cleanup
+                        if (stupidBot.getPendingUsers) {
+                            sessionManager.setPendingUsersMap(stupidBot.getPendingUsers());
+                        }
+                    } catch (bullError) {
+                        logger.error('❌ Error initializing Bull queue worker:', bullError);
+                    }
                 }
 
                 // Start periodic health monitoring (every 5 minutes)
@@ -1872,8 +1914,8 @@ app.get('/api/bot/status', async (req, res) => {
 
         const status = await stupidBot.getBotStatus(dbPool);
 
-        // Add reminder statistics if available
-        const reminderStats = dbPool ? await getReminderStats() : null;
+        // Add Bull queue statistics if available
+        const queueStats = await getQueueStats();
 
         res.json({
             success: true,
@@ -1883,7 +1925,7 @@ app.get('/api/bot/status', async (req, res) => {
                 connected: isConnected,
                 status: connectionStatus
             },
-            reminders: reminderStats
+            queue: queueStats
         });
     } catch (error) {
         logger.error('🤖 [STUPID-BOT] Status error:', error);
