@@ -466,15 +466,19 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null, sende
         const chatbotUrl = `${BOT_CONFIG.formUrl}?session=${sessionId}`;
         logger.info(`🤖 [STUPID-BOT] Generated session ${sessionId} for ${phoneNumber} (${senderName})`);
 
-        // Save session to local database for lookup when form completion webhook comes
-        await saveSession(sessionId, chatId, phoneNumber, dbPool);
-
         // Send lead to Make.com webhook (legacy) and avi-website API (creates Monday.com item)
+        // IMPORTANT: Notify avi-website BEFORE saving session locally, because both apps share
+        // the same database. If we save first, avi-website will find an existing session and
+        // skip creating the Monday.com lead.
         const isLid = chatId.includes('@lid');
         const leadName = senderName !== 'Unknown' ? senderName : (isLid ? `ליד ${phoneNumber.slice(-4)}` : `ליד מווטסאפ`);
 
-        // Notify avi-website to create Monday.com lead (primary)
+        // Notify avi-website to create Monday.com lead (primary) - MUST be before saveSession
         await notifyAviWebsite(phoneNumber, leadName, chatId, logger);
+
+        // Save session to local database for lookup when form completion webhook comes
+        // This is done AFTER notifyAviWebsite so avi-website creates the session and Monday.com lead
+        await saveSession(sessionId, chatId, phoneNumber, dbPool);
 
         // Also send to Make.com webhook (legacy backup)
         await sendLeadToWebhook({
