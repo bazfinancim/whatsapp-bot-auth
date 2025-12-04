@@ -20,7 +20,7 @@ const {
     cancelSessionMessages
 } = require('../lib/messageScheduler');
 const { getNowInIsrael } = require('../lib/timezoneHelper');
-const { createLead } = require('../lib/mondayClient');
+const { createLead, updateLead } = require('../lib/mondayClient');
 
 module.exports = async (req, res) => {
     try {
@@ -97,12 +97,28 @@ module.exports = async (req, res) => {
             appointmentLinkSentTime
         );
 
-        // Create/Update lead in Monday.com with form data
-        const mondayResponse = await createLead({
-            name: formData.name,
-            phone_number: session.phone_number,
-            ...formData
-        });
+        // Update or Create lead in Monday.com with form data
+        // Check if session has an existing Monday.com item ID (created during trigger)
+        const existingMondayItemId = session.form_data?.monday_item_id;
+        let mondayResponse;
+
+        if (existingMondayItemId) {
+            // Update existing lead with form data
+            console.log(`📝 Updating existing Monday.com lead: ${existingMondayItemId}`);
+            mondayResponse = await updateLead(existingMondayItemId, {
+                name: formData.name,
+                phone_number: session.phone_number,
+                ...formData
+            });
+        } else {
+            // No existing lead - create new one
+            console.log(`📝 Creating new Monday.com lead (no existing item ID)`);
+            mondayResponse = await createLead({
+                name: formData.name,
+                phone_number: session.phone_number,
+                ...formData
+            });
+        }
 
         console.log(`✅ Form submitted successfully for session: ${session_id}, Lead ID: ${leadId}`);
 

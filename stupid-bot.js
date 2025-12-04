@@ -76,10 +76,18 @@ async function handleTriggerLocally(phoneNumber, leadName, chatId, logger) {
         const session = await sessionManager.createSession(phoneNumber, chatId);
         logger.info(`✅ [LOCAL] Session created: ${session.sessionId}`);
 
-        // 2. Create Monday.com lead (non-blocking)
-        createLead({ name: leadName, phone_number: phoneNumber })
-            .then(result => logger.info(`✅ [LOCAL] Monday.com lead created: ${result.itemId}`))
-            .catch(err => logger.error(`❌ [LOCAL] Monday.com error: ${err.message}`));
+        // 2. Create Monday.com lead and store itemId in session
+        try {
+            const mondayResult = await createLead({ name: leadName, phone_number: phoneNumber });
+            logger.info(`✅ [LOCAL] Monday.com lead created: ${mondayResult.itemId}`);
+
+            // Store Monday.com item ID in session for later update
+            if (mondayResult.itemId) {
+                await sessionManager.setMondayItemId(session.sessionId, mondayResult.itemId);
+            }
+        } catch (mondayError) {
+            logger.error(`❌ [LOCAL] Monday.com error: ${mondayError.message}`);
+        }
 
         // 3. Schedule 19:00 form reminder
         const now = getNowInIsrael();
