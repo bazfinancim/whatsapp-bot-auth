@@ -461,45 +461,35 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null, sende
             return;
         }
 
-        // Generate session ID and construct chatbot URL locally
-        const sessionId = `${phoneNumber}-${Date.now()}`;
-        const chatbotUrl = `${BOT_CONFIG.formUrl}?session=${sessionId}`;
-        logger.info(`🤖 [STUPID-BOT] Generated session ${sessionId} for ${phoneNumber} (${senderName})`);
-
-        // Send lead to Make.com webhook (legacy) and avi-website API (creates Monday.com item)
-        // IMPORTANT: Notify avi-website BEFORE saving session locally, because both apps share
-        // the same database. If we save first, avi-website will find an existing session and
-        // skip creating the Monday.com lead.
         const isLid = chatId.includes('@lid');
         const leadName = senderName !== 'Unknown' ? senderName : (isLid ? `ליד ${phoneNumber.slice(-4)}` : `ליד מווטסאפ`);
 
-        // Notify avi-website to create Monday.com lead (primary) - MUST be before saveSession
-        await notifyAviWebsite(phoneNumber, leadName, chatId, logger);
+        // Notify avi-website to create session, Monday.com lead, and send messages
+        // avi-website handles: session creation, Monday.com lead, scheduling reminders
+        // avi-website also sends chatbot link via sendWhatsAppMessage (calls back to this server)
+        const aviResult = await notifyAviWebsite(phoneNumber, leadName, chatId, logger);
 
-        // Save session to local database for lookup when form completion webhook comes
-        // This is done AFTER notifyAviWebsite so avi-website creates the session and Monday.com lead
-        await saveSession(sessionId, chatId, phoneNumber, dbPool);
+        // Use avi-website's session if available, otherwise generate our own
+        let sessionId, chatbotUrl;
+        if (aviResult && aviResult.session) {
+            sessionId = aviResult.session.sessionId;
+            chatbotUrl = aviResult.session.chatbotUrl;
+            logger.info(`🤖 [STUPID-BOT] Using avi-website session: ${sessionId}`);
+        } else {
+            // Fallback: generate local session (shouldn't happen normally)
+            sessionId = `${phoneNumber}-${Date.now()}`;
+            chatbotUrl = `${BOT_CONFIG.formUrl}?session=${sessionId}`;
+            logger.warn(`🤖 [STUPID-BOT] avi-website failed, using local session: ${sessionId}`);
 
-        // Also send to Make.com webhook (legacy backup)
-        await sendLeadToWebhook({
-            phone: phoneNumber,
-            phone_number: phoneNumber,
-            country_code: 'IL',
-            name: leadName,
-            firstName: senderName !== 'Unknown' ? senderName.split(' ')[0] : '',
-            session_id: sessionId,
-            chat_id: chatId,
-            source: 'whatsapp_trigger',
-            is_lid: isLid,
-            status: 'new_lead',
-            timestamp: new Date().toISOString()
-        }, logger);
+            // Only save local session if avi-website failed
+            await saveSession(sessionId, chatId, phoneNumber, dbPool);
+        }
 
-        // Message #1: Send introduction (immediate)
+        // Message #1: Send introduction (immediate) - always send from here for correct order
         await client.sendMessage(chatId, { text: BOT_CONFIG.messages.introduction });
         logger.info(`🤖 [STUPID-BOT] Sent introduction message to ${phoneNumber}`);
 
-        // Also keep in memory for fast access (cache)
+        // Keep in memory for fast access (cache) - use avi-website's sessionId
         pendingUsers.set(phoneNumber, {
             timestamp: new Date(),
             chatId: chatId,
@@ -508,18 +498,15 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null, sende
         });
 
         const totalSessions = await getActiveSessionsCount(dbPool);
-        logger.info(`🤖 [STUPID-BOT] Session ${sessionId} saved to database (${totalSessions} active sessions)`);
+        logger.info(`🤖 [STUPID-BOT] Session ${sessionId} tracked (${totalSessions} active sessions)`);
 
         // Message #2: Send chatbot link after 2 seconds
+        // Use avi-website's chatbotUrl (which has the correct session ID)
         setTimeout(async () => {
             try {
                 const chatbotLinkMessage = BOT_CONFIG.messages.chatbotLink.replace('{chatbotUrl}', chatbotUrl);
                 await client.sendMessage(chatId, { text: chatbotLinkMessage });
                 logger.info(`🤖 [STUPID-BOT] Sent chatbot link to ${phoneNumber} (2 seconds after introduction)`);
-
-                // Mark form as sent for reminder scheduling
-                await markFormSent(sessionId, dbPool);
-                logger.info(`🤖 [STUPID-BOT] Marked form_sent_at for session ${sessionId}`);
             } catch (error) {
                 logger.error(`🤖 [STUPID-BOT] Error sending chatbot link:`, error);
             }
