@@ -12,7 +12,8 @@ const { Pool } = require('pg');
 // const cron = require('node-cron');
 const axios = require('axios');
 const stupidBot = require('./stupid-bot');
-const { migrateReminderColumns } = require('./lib/database-migration');
+const { migrateReminderColumns, migrateLidMappings } = require('./lib/database-migration');
+const lidMapping = require('./lib/lidMapping');
 // DISABLED: node-cron reminder system replaced by Bull queue (see lib/messageScheduler.js)
 // const { initializeScheduler, checkAndSendReminders, getReminderStats } = require('./lib/reminder-scheduler');
 
@@ -200,7 +201,13 @@ async function initializeDatabase() {
         // Migrate reminder columns to sessions table
         await migrateReminderColumns(dbPool);
 
-        logger.info('✅ Database schema initialized (templates + reminder columns)');
+        // Migrate LID mappings table for CTWA (Click-to-WhatsApp) ads contacts
+        await migrateLidMappings(dbPool);
+
+        // Initialize LID mapping module with database pool
+        lidMapping.setDbPool(dbPool);
+
+        logger.info('✅ Database schema initialized (templates + reminder columns + LID mappings)');
 
         // Migrate from JSON file to database if templates exist in file but not in DB
         const result = await dbPool.query('SELECT COUNT(*) FROM templates');
@@ -238,7 +245,7 @@ let isAuthenticated = false;
  * @param {object} msg - The message object (may contain remoteJidAlt)
  * @returns {string} - Resolved JID with real phone number
  */
-function resolveLidToPhone(jid, msg = null) {
+async function resolveLidToPhone(jid, msg = null) {
     if (!jid) return jid;
 
     const number = jid.split('@')[0];
@@ -248,13 +255,24 @@ function resolveLidToPhone(jid, msg = null) {
     if (isLid) {
         logger.info(`🔍 [LID-RESOLVE] Detected LID: ${number} (length: ${number.length})`);
 
-        // Method 1: Check message's remoteJidAlt field (alternate JID with real phone)
+        // Method 1: Check database mapping (from contact sync events)
+        try {
+            const mappedPhone = await lidMapping.getPhoneFromLid(number);
+            if (mappedPhone) {
+                logger.info(`✅ [LID-RESOLVE] DB mapping found: ${number} → ${mappedPhone}`);
+                return `${mappedPhone}@s.whatsapp.net`;
+            }
+        } catch (error) {
+            logger.error(`❌ [LID-RESOLVE] DB lookup error: ${error.message}`);
+        }
+
+        // Method 2: Check message's remoteJidAlt field (alternate JID with real phone)
         if (msg?.key?.remoteJidAlt) {
             logger.info(`✅ [LID-RESOLVE] Found remoteJidAlt: ${msg.key.remoteJidAlt}`);
             return msg.key.remoteJidAlt;
         }
 
-        // Method 2: Check if msg has participant field (contains real JID in groups)
+        // Method 3: Check if msg has participant field (contains real JID in groups)
         if (msg?.key?.participant) {
             logger.info(`✅ [LID-RESOLVE] Found participant: ${msg.key.participant}`);
             return msg.key.participant;
@@ -594,6 +612,71 @@ async function initializeWhatsApp() {
             }
         });
 
+        // =============================================================================
+        // CONTACT SYNC EVENTS - Capture LID to Phone mappings for CTWA (Facebook Ads) contacts
+        // =============================================================================
+
+        // Event: Contact sync (initial sync from phone)
+        client.ev.on('contacts.upsert', async (contacts) => {
+            logger.info(`📇 [CONTACTS-UPSERT] Received ${contacts.length} contacts`);
+            for (const contact of contacts) {
+                // Log all contact fields for debugging
+                if (contact.id?.includes('@lid') || contact.lid) {
+                    logger.info(`📇 [CONTACTS-UPSERT] Contact: id=${contact.id}, lid=${contact.lid}, name=${contact.name || contact.notify}`);
+                }
+                // Store mapping if we have both LID and phone number
+                if (contact.lid && contact.id && !contact.id.includes('@lid')) {
+                    const phone = contact.id.split('@')[0];
+                    await lidMapping.storeLidMapping(contact.lid, phone, contact.name || contact.notify);
+                }
+                // Also check if id is LID and we have a phone number elsewhere
+                if (contact.id?.includes('@lid') && contact.phoneNumber) {
+                    await lidMapping.storeLidMapping(contact.id.split('@')[0], contact.phoneNumber, contact.name || contact.notify);
+                }
+            }
+        });
+
+        // Event: Contact updates
+        client.ev.on('contacts.update', async (updates) => {
+            logger.info(`📇 [CONTACTS-UPDATE] Received ${updates.length} updates`);
+            for (const update of updates) {
+                if (update.id?.includes('@lid') || update.lid) {
+                    logger.info(`📇 [CONTACTS-UPDATE] Update: id=${update.id}, lid=${update.lid}, name=${update.name || update.notify}`);
+                }
+                if (update.lid && update.id && !update.id.includes('@lid')) {
+                    const phone = update.id.split('@')[0];
+                    await lidMapping.storeLidMapping(update.lid, phone, update.name || update.notify);
+                }
+            }
+        });
+
+        // Event: Phone number share (LID → Phone mapping from chat)
+        client.ev.on('chats.phoneNumberShare', async (data) => {
+            logger.info(`📱 [PHONE-SHARE] Received: ${JSON.stringify(data)}`);
+            if (data.jid && data.lid) {
+                const phone = data.jid.split('@')[0];
+                const lid = data.lid.split('@')[0];
+                await lidMapping.storeLidMapping(lid, phone);
+            }
+        });
+
+        // Event: Messaging history sync (includes contacts)
+        client.ev.on('messaging-history.set', async ({ contacts, chats, messages, isLatest }) => {
+            if (contacts && contacts.length > 0) {
+                logger.info(`📇 [HISTORY-SYNC] Received ${contacts.length} contacts from history sync`);
+                for (const contact of contacts) {
+                    if (contact.lid && contact.id && !contact.id.includes('@lid')) {
+                        const phone = contact.id.split('@')[0];
+                        await lidMapping.storeLidMapping(contact.lid, phone, contact.name || contact.notify);
+                    }
+                }
+            }
+        });
+
+        // =============================================================================
+        // MESSAGE EVENTS
+        // =============================================================================
+
         // Event: Incoming messages (replaces 'message' event)
         client.ev.on('messages.upsert', async ({ messages, type }) => {
             if (type !== 'notify') return; // Only handle new messages
@@ -618,7 +701,7 @@ async function initializeWhatsApp() {
 
                     // Resolve LID to real phone number if needed
                     const rawChatId = msg.key.remoteJid;
-                    const chatId = resolveLidToPhone(rawChatId, msg);
+                    const chatId = await resolveLidToPhone(rawChatId, msg);
 
                     // Log if LID was resolved
                     if (rawChatId !== chatId) {
@@ -2116,6 +2199,27 @@ app.get('/api/bot/sessions', async (req, res) => {
         });
     } catch (error) {
         logger.error('Error listing sessions:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// List LID to phone mappings (for debugging CTWA/Facebook Ads contacts)
+app.get('/api/bot/lid-mappings', async (req, res) => {
+    try {
+        const mappings = await lidMapping.getAllMappings();
+        res.json({
+            success: true,
+            count: mappings.length,
+            mappings: mappings.map(row => ({
+                lid: row.lid,
+                phone: row.phone_number,
+                name: row.name,
+                createdAt: row.created_at,
+                updatedAt: row.updated_at
+            }))
+        });
+    } catch (error) {
+        logger.error('Error listing LID mappings:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
