@@ -19,7 +19,7 @@ const { migrateReminderColumns } = require('./lib/database-migration');
 // CONSOLIDATED: Import Bull queue scheduler and session manager (from avi-website)
 // =============================================================================
 const sessionManager = require('./lib/sessionManager');
-const { initializeWorker, setSockClient, getQueueStats, listPendingJobs } = require('./lib/messageScheduler');
+const { initializeWorker, setSockClient, getQueueStats, listPendingJobs, listSessionMessages } = require('./lib/messageScheduler');
 
 // =============================================================================
 // IMMEDIATE SESSION RESET (runs BEFORE server starts)
@@ -1947,6 +1947,22 @@ app.get('/api/bot/pending-jobs', async (req, res) => {
         });
     } catch (error) {
         logger.error('Error listing pending jobs:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// List all messages for a session (including cancelled, sent, failed)
+app.get('/api/bot/session-messages', async (req, res) => {
+    try {
+        const { session_id } = req.query;
+        const messages = await listSessionMessages(session_id || null);
+        res.json({
+            success: true,
+            count: messages.length,
+            messages: messages
+        });
+    } catch (error) {
+        logger.error('Error listing session messages:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
