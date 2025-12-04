@@ -50,8 +50,43 @@ const pendingUsers = new Map();
 // This maps unique session IDs to the original WhatsApp sender
 const sessionMap = new Map();
 
-// Make.com webhook URL for Monday.com integration
+// Make.com webhook URL for Monday.com integration (legacy)
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || 'https://hook.eu2.make.com/yyci6swodxsfq23kjvolcocuaujes78e';
+
+// Avi-website API URL for direct Monday.com integration
+const AVI_WEBSITE_API_URL = process.env.AVI_WEBSITE_API_URL || 'https://avi-website-frankfurt.onrender.com';
+
+/**
+ * Notify avi-website API to create session and Monday.com lead
+ * Called immediately when someone triggers the bot
+ */
+async function notifyAviWebsite(phoneNumber, name, chatId, logger) {
+    try {
+        logger.info(`📤 [AVI-WEBSITE] Notifying avi-website for ${phoneNumber} (${name})`);
+
+        const response = await fetch(`${AVI_WEBSITE_API_URL}/api/whatsapp/message`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                phone: phoneNumber,
+                message: 'start',  // Simulate start trigger
+                name: name,
+                chat_id: chatId
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`API returned ${response.status}`);
+        }
+
+        const result = await response.json();
+        logger.info(`✅ [AVI-WEBSITE] Session created: ${result.session?.sessionId || 'unknown'}`);
+        return result;
+    } catch (error) {
+        logger.error(`❌ [AVI-WEBSITE] Failed to notify: ${error.message}`);
+        return null;
+    }
+}
 
 /**
  * Send lead data to Make.com webhook (creates Monday.com item)
@@ -434,13 +469,19 @@ async function handleTriggerMessage(client, chatId, logger, dbPool = null, sende
         // Save session to local database for lookup when form completion webhook comes
         await saveSession(sessionId, chatId, phoneNumber, dbPool);
 
-        // Send lead to Make.com webhook immediately (creates Monday.com item)
+        // Send lead to Make.com webhook (legacy) and avi-website API (creates Monday.com item)
         const isLid = chatId.includes('@lid');
+        const leadName = senderName !== 'Unknown' ? senderName : (isLid ? `ליד ${phoneNumber.slice(-4)}` : `ליד מווטסאפ`);
+
+        // Notify avi-website to create Monday.com lead (primary)
+        await notifyAviWebsite(phoneNumber, leadName, chatId, logger);
+
+        // Also send to Make.com webhook (legacy backup)
         await sendLeadToWebhook({
             phone: phoneNumber,
-            phone_number: phoneNumber,  // Duplicate for Make.com mapping flexibility
+            phone_number: phoneNumber,
             country_code: 'IL',
-            name: senderName !== 'Unknown' ? senderName : (isLid ? `ליד ${phoneNumber.slice(-4)}` : `ליד מווטסאפ`),
+            name: leadName,
             firstName: senderName !== 'Unknown' ? senderName.split(' ')[0] : '',
             session_id: sessionId,
             chat_id: chatId,
